@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generar PDF de Ejemplo</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f0f0f0;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Generador de PDF de Ejemplo - Extracto Bancario</h1>
+    <button onclick="generarPDF()">Generar PDF de Ejemplo</button>
+    
+    <div class="info">
+        <h3>Información:</h3>
+        <p>Este generador crea un PDF de ejemplo con formato de extracto bancario que incluye:</p>
+        <ul>
+            <li>Columnas: Fecha, Concepto, Crédito, Débito, Saldo</li>
+            <li>Datos de transacciones de ejemplo</li>
+            <li>Formato tabular para análisis automático</li>
+        </ul>
+    </div>
+
+    <script>
+        function generarPDF() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            // Título
+            doc.setFontSize(16);
+            doc.text('EXTRACTO BANCARIO - BBVA', 105, 20, { align: 'center' });
+            
+            doc.setFontSize(10);
+            doc.text('Período: Noviembre 2024', 105, 30, { align: 'center' });
+            
+            // Encabezados de tabla
+            doc.setFontSize(9);
+            doc.setFont(undefined, 'bold');
+            const startY = 45;
+            doc.text('Fecha', 15, startY);
+            doc.text('Concepto', 45, startY);
+            doc.text('Crédito', 120, startY);
+            doc.text('Débito', 150, startY);
+            doc.text('Saldo', 180, startY);
+            
+            // Línea separadora
+            doc.line(15, startY + 2, 195, startY + 2);
+            
+            // Datos de ejemplo
+            doc.setFont(undefined, 'normal');
+            const transacciones = [
+                ['01/11/2024', 'Depósito Inicial', '5000.00', '', '5000.00'],
+                ['03/11/2024', 'Pago Servicios', '', '150.50', '4849.50'],
+                ['05/11/2024', 'Transferencia Recibida', '1200.00', '', '6049.50'],
+                ['08/11/2024', 'Compra Supermercado', '', '320.75', '5728.75'],
+                ['10/11/2024', 'Pago Tarjeta Crédito', '', '800.00', '4928.75'],
+                ['12/11/2024', 'Salario', '3500.00', '', '8428.75'],
+                ['15/11/2024', 'Retiro Cajero', '', '200.00', '8228.75'],
+                ['18/11/2024', 'Pago Alquiler', '', '1500.00', '6728.75'],
+                ['20/11/2024', 'Transferencia Recibida', '450.00', '', '7178.75'],
+                ['22/11/2024', 'Compra Online', '', '89.99', '7088.76'],
+                ['25/11/2024', 'Pago Luz', '', '75.30', '7013.46'],
+                ['28/11/2024', 'Depósito', '2000.00', '', '9013.46'],
+            ];
+            
+            let y = startY + 8;
+            transacciones.forEach(trans => {
+                doc.text(trans[0], 15, y);
+                doc.text(trans[1], 45, y);
+                doc.text(trans[2], 120, y);
+                doc.text(trans[3], 150, y);
+                doc.text(trans[4], 180, y);
+                y += 7;
+            });
+            
+            // Pie de página
+            doc.setFontSize(8);
+            doc.text('Documento generado automáticamente', 105, 280, { align: 'center' });
+            
+            // Guardar
+            doc.save('ejemplo-extracto-bancario.pdf');
+            alert('PDF generado exitosamente!');
+        }
+    </script>
+</body>
+</html>

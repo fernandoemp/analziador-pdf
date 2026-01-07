@@ -1,0 +1,11 @@
+Fecha,Fecha Valor,Concepto,Codigo,Número Doc,Oficina,Crédito,Débito,Detalle
+01/12/2024,01/12/2024,Compra con tarjeta,001,12345,Central,,150.50,Supermercado La Colonia
+05/12/2024,05/12/2024,Depósito salario,002,12346,Central,2500.00,,Salario mensual empresa XYZ
+10/12/2024,10/12/2024,Transferencia enviada,003,12347,Central,,800.00,Pago alquiler apartamento
+12/12/2024,12/12/2024,Compra con tarjeta,004,12348,Central,,45.75,Gasolina Estación Shell
+15/12/2024,15/12/2024,Pago automático,005,12349,Central,,12.99,Netflix suscripción mensual
+18/12/2024,18/12/2024,Compra con tarjeta,006,12350,Central,,85.30,Restaurante El Buen Sabor
+20/12/2024,20/12/2024,Débito automático,007,12351,Central,,65.00,Pago servicio eléctrico
+22/12/2024,22/12/2024,Compra con tarjeta,008,12352,Central,,15.50,Uber viaje al centro
+25/12/2024,25/12/2024,Compra con tarjeta,009,12353,Central,,120.80,Supermercado Walmart
+28/12/2024,28/12/2024,Transferencia recibida,010,12354,Central,500.00,,Pago freelance proyecto web
