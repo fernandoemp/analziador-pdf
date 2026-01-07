@@ -406,6 +406,7 @@ const PdfStructuredExtractor: React.FC = () => {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [totalParts, setTotalParts] = useState<number | null>(null);
   const [processedParts, setProcessedParts] = useState<number>(0);
+  const [aiPageRowCounts, setAiPageRowCounts] = useState<number[]>([]);
   const [headerCandidate, setHeaderCandidate] = useState<string[] | null>(null);
   const [confirmedHeaders, setConfirmedHeaders] = useState<string[] | null>(null);
   const [headerDraft, setHeaderDraft] = useState<string[] | null>(null);
@@ -415,6 +416,8 @@ const PdfStructuredExtractor: React.FC = () => {
   const [descriptionFilter, setDescriptionFilter] = useState<string>('');
   const deferredDescriptionFilter = useDeferredValue(descriptionFilter);
   const [isFilterPending, startFilterTransition] = useTransition();
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const lastUnfilteredPageRef = useRef<number>(1);
 
   const pdfScrollRef = useRef<HTMLDivElement | null>(null);
   const aiScrollRef = useRef<HTMLDivElement | null>(null);
@@ -450,8 +453,13 @@ const PdfStructuredExtractor: React.FC = () => {
     setRows([]);
     setFileName(file.name);
     setSelectedFile(file);
+    setSelectedDates([]);
+    setDescriptionFilter('');
+    setCurrentPage(1);
+    lastUnfilteredPageRef.current = 1;
     setAiHeaders([]);
     setAiRows([]);
+    setAiPageRowCounts([]);
     setDiff(null);
     setVerifyError('');
     setVerifyMessage('');
@@ -596,9 +604,12 @@ const PdfStructuredExtractor: React.FC = () => {
     setVerifyDebugLog('');
     setAiHeaders([]);
     setAiRows([]);
+    setAiPageRowCounts([]);
     setDiff(null);
     setTotalParts(null);
     setProcessedParts(0);
+    setCurrentPage(1);
+    lastUnfilteredPageRef.current = 1;
     try {
       if (selectedProvider === 'gemini') {
         const geminiKey = settingsDb.getGeminiApiKey();
@@ -613,9 +624,10 @@ const PdfStructuredExtractor: React.FC = () => {
               setTotalParts(totalParts);
               setProcessedParts(processedParts);
             }
-            if (headers && rows && rows.length > 0) {
-              setAiHeaders(headers);
+            if (headers) setAiHeaders(headers);
+            if (rows) {
               setAiRows(prev => [...prev, ...rows]);
+              setAiPageRowCounts(prev => [...prev, rows.length]);
             }
           },
         });
@@ -654,9 +666,10 @@ const PdfStructuredExtractor: React.FC = () => {
               setTotalParts(totalParts);
               setProcessedParts(processedParts);
             }
-            if (headers && rows && rows.length > 0) {
-              setAiHeaders(headers);
+            if (headers) setAiHeaders(headers);
+            if (rows) {
               setAiRows(prev => [...prev, ...rows]);
+              setAiPageRowCounts(prev => [...prev, rows.length]);
             }
           },
         });
@@ -853,6 +866,45 @@ const syncScroll = () => {
 
   const hasActiveFilters = selectedDates.length > 0 || descriptionFilter.trim().length > 0;
 
+  const totalPages = useMemo(() => Math.max(1, aiPageRowCounts.length || 1), [aiPageRowCounts.length]);
+
+  const safeCurrentPage = Math.min(Math.max(currentPage, 1), totalPages);
+
+  const pageStartIndex = useMemo(() => {
+    if (aiPageRowCounts.length === 0) return 0;
+    let start = 0;
+    for (let i = 0; i < safeCurrentPage - 1; i++) start += aiPageRowCounts[i] || 0;
+    return start;
+  }, [aiPageRowCounts, safeCurrentPage]);
+
+  const pageRowCount = useMemo(() => {
+    if (aiPageRowCounts.length === 0) return aiRows.length;
+    const count = aiPageRowCounts[safeCurrentPage - 1];
+    if (typeof count === 'number') return count;
+    return Math.max(0, aiRows.length - pageStartIndex);
+  }, [aiPageRowCounts, aiRows.length, pageStartIndex, safeCurrentPage]);
+
+  const visibleRowIndices = useMemo(() => {
+    if (hasActiveFilters) return filteredRowIndices;
+    const start = pageStartIndex;
+    const end = Math.min(pageStartIndex + pageRowCount, aiRows.length);
+    const indices: number[] = [];
+    for (let i = start; i < end; i++) indices.push(i);
+    return indices;
+  }, [aiRows.length, filteredRowIndices, hasActiveFilters, pageRowCount, pageStartIndex]);
+
+  useEffect(() => {
+    if (hasActiveFilters) {
+      lastUnfilteredPageRef.current = safeCurrentPage;
+    }
+  }, [hasActiveFilters, safeCurrentPage]);
+
+  useEffect(() => {
+    if (!hasActiveFilters && currentPage !== safeCurrentPage) {
+      setCurrentPage(safeCurrentPage);
+    }
+  }, [currentPage, hasActiveFilters, safeCurrentPage]);
+
   const toggleDateSelection = (value: string) => {
     startFilterTransition(() => {
       setSelectedDates(prev => (prev.includes(value) ? prev.filter(d => d !== value) : [...prev, value]));
@@ -868,6 +920,7 @@ const syncScroll = () => {
     startFilterTransition(() => {
       setSelectedDates([]);
       setDescriptionFilter('');
+      setCurrentPage(lastUnfilteredPageRef.current || 1);
     });
   };
 
@@ -1325,7 +1378,7 @@ const syncScroll = () => {
                     <div className="flex items-center justify-between gap-2">
                       <Label htmlFor="ai-desc-filter">Filtro por descripción</Label>
                       <div className="text-xs text-muted-foreground">
-                        Mostrando {filteredRowIndices.length} de {aiRows.length}
+                        Mostrando {visibleRowIndices.length} de {aiRows.length}
                       </div>
                     </div>
                     <Input
@@ -1399,6 +1452,29 @@ const syncScroll = () => {
                     Hay {invalidRows.length} filas con montos inválidos (crédito/débito vacíos o ambos con valor).
                   </div>
                 )}
+                {!hasActiveFilters && aiRows.length > 0 && (
+                  <div className="mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground">
+                    <span>
+                      Página {safeCurrentPage} de {totalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={safeCurrentPage <= 1}
+                      onClick={() => setCurrentPage(safeCurrentPage - 1)}
+                    >
+                      Anterior
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={safeCurrentPage >= totalPages}
+                      onClick={() => setCurrentPage(safeCurrentPage + 1)}
+                    >
+                      Siguiente
+                    </Button>
+                  </div>
+                )}
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1428,14 +1504,14 @@ const syncScroll = () => {
                           Sin filas
                         </TableCell>
                       </TableRow>
-                    ) : filteredRowIndices.length === 0 ? (
+                    ) : hasActiveFilters && visibleRowIndices.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={aiHeaders.length + 1} className="text-center text-muted-foreground">
                           Sin coincidencias
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredRowIndices.map(rowIndex => {
+                      visibleRowIndices.map(rowIndex => {
                         const r = aiRows[rowIndex] || [];
                         const isInvalid = invalidRows.includes(rowIndex);
                         return (
