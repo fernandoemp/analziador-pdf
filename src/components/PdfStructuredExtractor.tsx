@@ -439,6 +439,26 @@ const PdfStructuredExtractor: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (models.length === 0) {
+      if (selectedModelId !== '') {
+        setSelectedModelId('');
+      }
+      return;
+    }
+    const available = models.filter(m => m.provider === selectedProvider);
+    if (available.length === 0) {
+      if (selectedModelId !== '') {
+        setSelectedModelId('');
+      }
+      return;
+    }
+    const exists = available.some(m => m.id === selectedModelId);
+    if (!exists) {
+      setSelectedModelId(available[0].id);
+    }
+  }, [models, selectedProvider, selectedModelId]);
+
+  useEffect(() => {
     return () => {
       if (pdfUrl) {
         URL.revokeObjectURL(pdfUrl);
@@ -1021,7 +1041,14 @@ const syncScroll = () => {
                   </div>
                   <div>
                     <Label>Modelo</Label>
-                    <Select value={selectedModelId} onValueChange={setSelectedModelId}>
+                    <Select
+                      value={
+                        models.some(m => m.id === selectedModelId && m.provider === selectedProvider)
+                          ? selectedModelId
+                          : undefined
+                      }
+                      onValueChange={setSelectedModelId}
+                    >
                       <SelectTrigger className="mt-1">
                         <SelectValue placeholder="Selecciona modelo" />
                       </SelectTrigger>
