@@ -5,8 +5,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { FileType, Plus, Trash2, Pencil, AlertTriangle } from 'lucide-react';
-import { settingsDb, type AiModelConfig, type AiProviderId, type AiExtractionLog } from '@/lib/localDb';
+import { Plus, Trash2, Pencil, AlertTriangle, Square, Play, RotateCcw } from 'lucide-react';
+import {
+  settingsDb,
+  type AiModelConfig,
+  type AiProviderId,
+  type AiExtractionLog,
+  type AiRequestLog,
+} from '@/lib/localDb';
 import {
   analyzePDFWithGemini,
   analyzePDFWithKimi,
@@ -16,7 +22,6 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,354 +34,11 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Progress } from '@/components/ui/progress';
 import { Checkbox } from '@/components/ui/checkbox';
-
-type TextItem = { str: string; x: number; y: number; };
-
-const loadPdfJs = async () => {
-  const pdfjsLib = await import('pdfjs-dist');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-  return pdfjsLib;
-};
-
-const groupRows = (items: TextItem[]) => {
-  const rows: TextItem[][] = [];
-  const tol = 5;
-  for (const it of items) {
-    let row = rows.find(r => Math.abs(r[0].y - it.y) <= tol);
-    if (!row) {
-      row = [];
-      rows.push(row);
-    }
-    row.push(it);
-  }
-  rows.forEach(r => r.sort((a, b) => a.x - b.x));
-  rows.sort((a, b) => b[0].y - a[0].y);
-  return rows;
-};
-
-const normalizeHeaderText = (value: string) =>
-  value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
-
-const detectAmountColumnsFromHeaders = (headers: string[]) => {
-  let creditIndex = -1;
-  let debitIndex = -1;
-
-  headers.forEach((h, i) => {
-    const n = normalizeHeaderText(h);
-    if (n.includes('credito') || n.includes('haber') || n.includes('abono')) {
-      if (creditIndex === -1) creditIndex = i;
-    }
-    if (n.includes('debito') || n.includes('debe') || n.includes('cargo')) {
-      if (debitIndex === -1) debitIndex = i;
-    }
-  });
-
-  if (creditIndex === -1 || debitIndex === -1) return null;
-  return { creditIndex, debitIndex };
-};
-
-const computeInvalidAmountRows = (headers: string[], rows: string[][]) => {
-  const cols = detectAmountColumnsFromHeaders(headers);
-  if (!cols) return [];
-  const { creditIndex, debitIndex } = cols;
-  const invalid: number[] = [];
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i] || [];
-    const creditValue = (row[creditIndex] || '').toString().trim();
-    const debitValue = (row[debitIndex] || '').toString().trim();
-    const bothFilled = creditValue !== '' && debitValue !== '';
-    const bothEmpty = creditValue === '' && debitValue === '';
-    if (bothFilled || bothEmpty) {
-      invalid.push(i);
-    }
-  }
-  return invalid;
-};
-
-const detectHeaderIndex = (rows: TextItem[][]) => {
-  const keywords = ['fecha', 'date', 'concepto', 'descripcion', 'monto', 'amount', 'credito', 'debito', 'saldo', 'balance'];
-  for (let i = 0; i < Math.min(rows.length, 25); i++) {
-    const line = rows[i].map(it => it.str).join(' ').toLowerCase();
-    const matches = keywords.filter(k => line.includes(k)).length;
-    if (matches >= 2) return i;
-  }
-  return -1;
-};
-
-const buildXBins = (rows: TextItem[][]) => {
-  const bins: number[] = [];
-  const tol = 10;
-  for (const row of rows) {
-    for (const it of row) {
-      const idx = bins.findIndex(x => Math.abs(x - it.x) <= tol);
-      if (idx === -1) bins.push(it.x);
-    }
-  }
-  bins.sort((a, b) => a - b);
-  return bins;
-};
-
-const dateRegex = /^(\d{2})[\/\-\.](\d{2})[\/\-\.](\d{2,4})$/;
-const looksLikeAmount = (s: string) => /^[\-\+]?(\d{1,3}(\.\d{3})*|\d+)(,\d{2})?$/.test(s) || /^[\-\+]?(\d{1,3}(,\d{3})*|\d+)(\.\d{2})?$/.test(s);
-
-const nearestBinIndex = (x: number, xbins: number[]) => {
-  let best = 0;
-  let bestDist = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < xbins.length; i++) {
-    const d = Math.abs(xbins[i] - x);
-    if (d < bestDist) {
-      bestDist = d;
-      best = i;
-    }
-  }
-  return best;
-};
-
-const clusterRowByX = (row: TextItem[], tol: number) => {
-  const sorted = [...row].sort((a, b) => a.x - b.x);
-  const groups: TextItem[][] = [];
-  for (const it of sorted) {
-    const g = groups[groups.length - 1];
-    if (!g) {
-      groups.push([it]);
-      continue;
-    }
-    const gx = g.reduce((s, v) => s + v.x, 0) / g.length;
-    if (Math.abs(gx - it.x) <= tol) {
-      g.push(it);
-    } else {
-      groups.push([it]);
-    }
-  }
-  return groups;
-};
-
-const normalizeHeaderName = (name: string) => {
-  const n = name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  const pairs: [string[], string][] = [
-    [['fecha','dia','date'], 'Fecha'],
-    [['descripcion','concepto','movimiento','detalle','desc'], 'Descripción'],
-    [['origen','origin'], 'Origen'],
-    [['credito','cr','haber','abono'], 'Crédito'],
-    [['debito','de','cargo','debe'], 'Débito'],
-    [['saldo','balance'], 'Saldo'],
-  ];
-  for (const [keys, canon] of pairs) {
-    if (keys.some(k => n.includes(k))) return canon;
-  }
-  return '';
-};
-
-const labelsAndPositionsFromHeaderRow = (row: TextItem[]) => {
-  const groups = clusterRowByX(row, 20);
-  const raw = groups.map(g => ({ 
-    label: g.map(t => t.str).join(' ').trim(), 
-    pos: Math.round(g.reduce((s, v) => s + v.x, 0) / g.length)
-  }));
-  const filtered = raw
-    .map(r => ({ label: normalizeHeaderName(r.label), pos: r.pos }))
-    .filter(r => r.label && r.label !== '-' && r.label !== '—');
-  const unique: { label: string; pos: number }[] = [];
-  const seen = new Set<string>();
-  for (const r of filtered) {
-    if (!seen.has(r.label)) {
-      unique.push(r);
-      seen.add(r.label);
-    }
-  }
-  const labels = unique.map(u => u.label);
-  const positions = unique.map(u => u.pos);
-  return { labels, positions };
-};
-
-const nearestHeaderIndex = (x: number, headerPositions: number[]) => {
-  let best = 0;
-  let bestDist = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < headerPositions.length; i++) {
-    const d = Math.abs(headerPositions[i] - x);
-    if (d < bestDist) {
-      bestDist = d;
-      best = i;
-    }
-  }
-  return best;
-};
-
-const buildBinToHeaderMap = (xbins: number[], headerPositions: number[], headerCount: number) => {
-  const map: number[] = [];
-  for (let i = 0; i < xbins.length; i++) {
-    if (headerPositions.length > 0) {
-      let bestIdx = 0;
-      let bestDist = Number.POSITIVE_INFINITY;
-      for (let j = 0; j < headerPositions.length; j++) {
-        const d = Math.abs(headerPositions[j] - xbins[i]);
-        if (d < bestDist) {
-          bestDist = d;
-          bestIdx = j;
-        }
-      }
-      map.push(bestIdx);
-    } else {
-      const idx = Math.min(i, headerCount - 1);
-      map.push(idx);
-    }
-  }
-  return map;
-};
-
-const foldByDate = (
-  grouped: TextItem[][],
-  xbins: number[],
-  headers: string[],
-  binToHeaderMap?: number[],
-  headerPositions?: number[]
-) => {
-  const lowerHeaders = headers.map(h => h.toLowerCase());
-  let dateIndex = lowerHeaders.findIndex(h => h.includes('fecha') || h.includes('date'));
-  if (dateIndex === -1) dateIndex = 0;
-  let descIndex = lowerHeaders.findIndex(h => h.includes('desc') || h.includes('concepto') || h.includes('descripcion'));
-  if (descIndex === -1) descIndex = Math.min(1, headers.length - 1);
-  const creditIndex = lowerHeaders.findIndex(h => h.includes('cr'));
-  const debitIndex = lowerHeaders.findIndex(h => h.includes('de'));
-  const saldoIndex = lowerHeaders.findIndex(h => h.includes('sal'));
-  const originIndex = lowerHeaders.findIndex(h => h.includes('orig'));
-
-  const out: string[][] = [];
-  let current: string[] | null = null;
-  const isNoiseToken = (s: string) => {
-    const t = s.trim();
-    if (!t) return true;
-    if (t === '-' || t === '—') return true;
-    if (/^[\.\,]$/.test(t)) return true;
-    return false;
-  };
-
-  for (const row of grouped) {
-    const rowText = row.map(it => it.str).join(' ').trim();
-    let tokenDate = '';
-    for (const it of row) {
-      if (dateRegex.test(it.str.trim())) {
-        tokenDate = it.str.trim();
-        break;
-      }
-    }
-    if (!tokenDate) {
-      const m = rowText.match(/(\d{2}[\/\-\.]\d{2}[\/\-\.]\d{2,4})/);
-      if (m) tokenDate = m[1];
-    }
-
-    if (tokenDate) {
-      current = Array(headers.length).fill('');
-      current[dateIndex] = tokenDate;
-      for (const it of row) {
-        if (it.str.trim() === tokenDate) continue;
-        if (isNoiseToken(it.str)) continue;
-        let idx: number;
-        if (headerPositions && headerPositions.length > 0) {
-          idx = nearestHeaderIndex(it.x, headerPositions);
-        } else {
-          const bin = nearestBinIndex(it.x, xbins);
-          idx = binToHeaderMap && binToHeaderMap[bin] !== undefined ? binToHeaderMap[bin] : Math.min(bin, headers.length - 1);
-        }
-        if (idx === descIndex || idx === originIndex) {
-          current[idx] = current[idx] ? `${current[idx]}\n${it.str}` : it.str;
-        } else if (idx === creditIndex || idx === debitIndex || idx === saldoIndex) {
-          if (isNoiseToken(it.str)) continue;
-          if (!current[idx]) current[idx] = it.str;
-        } else {
-          current[idx] = current[idx] ? `${current[idx]}\n${it.str}` : it.str;
-        }
-      }
-      out.push(current.map(c => c.trim()));
-    } else if (current) {
-      for (const it of row) {
-        if (isNoiseToken(it.str)) continue;
-        if (looksLikeAmount(it.str)) {
-          let idx: number;
-          if (headerPositions && headerPositions.length > 0) {
-            idx = nearestHeaderIndex(it.x, headerPositions);
-          } else {
-            const bin = nearestBinIndex(it.x, xbins);
-            idx = binToHeaderMap && binToHeaderMap[bin] !== undefined ? binToHeaderMap[bin] : Math.min(bin, headers.length - 1);
-          }
-          if (idx === creditIndex || idx === debitIndex || idx === saldoIndex) {
-            if (!current[idx]) current[idx] = it.str;
-            continue;
-          }
-        }
-        {
-          const v = it.str;
-          current[descIndex] = current[descIndex] ? `${current[descIndex]}\n${v}` : v;
-        }
-      }
-      out[out.length - 1] = current.map((c) => (c || '').trim());
-    }
-  }
-  return out;
-};
-
-const cleanColumns = (headers: string[], rows: string[][]) => {
-  const canonOrder = ['Fecha', 'Descripción', 'Origen', 'Crédito', 'Débito', 'Saldo'];
-  const headerMap = headers.map(h => normalizeHeaderName(h)).map(h => h || '');
-  const idxByCanon: Record<string, number> = {};
-  for (let i = 0; i < headerMap.length; i++) {
-    const h = headerMap[i];
-    if (h && idxByCanon[h] === undefined) idxByCanon[h] = i;
-  }
-  const finalHeaders = canonOrder.filter(h => idxByCanon[h] !== undefined);
-  const finalRows = rows.map(r => finalHeaders.map(h => {
-    const idx = idxByCanon[h];
-    const v = idx !== undefined ? r[idx] || '' : '';
-    return v;
-  }));
-  return { finalHeaders, finalRows };
-};
-
-const computeSimpleDiff = (localHeaders: string[], localRows: string[][], aiHeaders: string[], aiRows: string[][]) => {
-  const findIdx = (hs: string[], keys: string[]) => {
-    const lower = hs.map(h => (h || '').toLowerCase());
-    return lower.findIndex(h => keys.some(k => h.includes(k)));
-  };
-  const dateIdxLocal = findIdx(localHeaders, ['fecha', 'date']);
-  const dateIdxAI = findIdx(aiHeaders, ['fecha', 'date']);
-  const descIdxLocal = findIdx(localHeaders, ['desc', 'concepto', 'descripcion']);
-  const descIdxAI = findIdx(aiHeaders, ['desc', 'concepto', 'descripcion']);
-  const amountIdxLocal = ['credito', 'crédito', 'debito', 'débito', 'saldo', 'balance']
-    .map(k => findIdx(localHeaders, [k]))
-    .filter(i => i >= 0);
-  const amountIdxAI = ['credito', 'crédito', 'debito', 'débito', 'saldo', 'balance']
-    .map(k => findIdx(aiHeaders, [k]))
-    .filter(i => i >= 0);
-
-  const makeKey = (row: string[], dateIdx: number, descIdx: number) => {
-    const date = dateIdx >= 0 ? (row[dateIdx] || '') : '';
-    const desc = descIdx >= 0 ? (row[descIdx] || '') : (row[1] || '');
-    return `${date}|${desc}`;
-  };
-
-  const localKeys = new Set(localRows.map(r => makeKey(r, dateIdxLocal, descIdxLocal)));
-  const aiKeys = new Set(aiRows.map(r => makeKey(r, dateIdxAI, descIdxAI)));
-  let missingRows = 0;
-  let extraRows = 0;
-  localKeys.forEach(k => { if (!aiKeys.has(k)) missingRows++; });
-  aiKeys.forEach(k => { if (!localKeys.has(k)) extraRows++; });
-
-  let mismatchedAmounts = 0;
-  const aiMap = new Map<string, string[]>();
-  aiRows.forEach(r => aiMap.set(makeKey(r, dateIdxAI, descIdxAI), r));
-  localRows.forEach(r => {
-    const ai = aiMap.get(makeKey(r, dateIdxLocal, descIdxLocal));
-    if (!ai) return;
-    const lAmounts = amountIdxLocal.map(i => r[i] || '').join('|');
-    const aAmounts = amountIdxAI.map(i => ai[i] || '').join('|');
-    if (lAmounts !== aAmounts) mismatchedAmounts++;
-  });
-
-  return { missingRows, extraRows, mismatchedAmounts };
-};
+import { AiLogsDialog } from '@/components/pdf-structured-extractor/AiLogsDialog';
+import { ComparePdfAiDialog } from '@/components/pdf-structured-extractor/ComparePdfAiDialog';
+import { PdfLocalControls } from '@/components/pdf-structured-extractor/PdfLocalControls';
+import { useLocalPdfAnalysis } from '@/hooks/useLocalPdfAnalysis';
+import { computeInvalidAmountRows, computeSimpleDiff, normalizeHeaderText } from '@/lib/pdfStructuredExtractorUtils';
 
 const PdfStructuredExtractor: React.FC = () => {
   const [headers, setHeaders] = useState<string[]>([]);
@@ -393,6 +55,7 @@ const PdfStructuredExtractor: React.FC = () => {
   const [aiRows, setAiRows] = useState<string[][]>([]);
   const [diff, setDiff] = useState<{ missingRows: number; extraRows: number; mismatchedAmounts: number } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+  const [aiAnalysisState, setAiAnalysisState] = useState<'idle' | 'running' | 'stopped' | 'failed' | 'completed'>('idle');
   const [selectedProvider, setSelectedProvider] = useState<AiProviderId>('gemini');
   const [models, setModels] = useState<AiModelConfig[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>('');
@@ -400,7 +63,9 @@ const PdfStructuredExtractor: React.FC = () => {
   const [temperature, setTemperature] = useState<number>(0.1);
   const [topP, setTopP] = useState<number | undefined>(undefined);
   const [stream, setStream] = useState<boolean>(false);
-  const [showLogs, setShowLogs] = useState<boolean>(false);
+  const [showHistoryIa, setShowHistoryIa] = useState<boolean>(false);
+  const [focusAiLogId, setFocusAiLogId] = useState<string | null>(null);
+  const [currentAiLogId, setCurrentAiLogId] = useState<string | null>(null);
   const [aiLogs, setAiLogs] = useState<AiExtractionLog[]>([]);
   const [showCompareModal, setShowCompareModal] = useState<boolean>(false);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -422,6 +87,11 @@ const PdfStructuredExtractor: React.FC = () => {
   const pdfScrollRef = useRef<HTMLDivElement | null>(null);
   const aiScrollRef = useRef<HTMLDivElement | null>(null);
   const syncingRef = useRef<boolean>(false);
+  const aiAbortControllerRef = useRef<AbortController | null>(null);
+  const aiRowsRef = useRef<string[][]>([]);
+  const aiHeadersRef = useRef<string[]>([]);
+  const aiNextPartIndexRef = useRef<number>(0);
+  const currentAiLogIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const initialModels = settingsDb.getAiModels();
@@ -437,6 +107,28 @@ const PdfStructuredExtractor: React.FC = () => {
     const initialLogs = settingsDb.getAiLogs();
     setAiLogs(initialLogs);
   }, []);
+
+  const {
+    analysisRuns,
+    localAnalysisState,
+    localProgress,
+    pauseLocalAnalysis,
+    stopLocalAnalysis,
+    resumeOrContinueLocalAnalysis,
+    startLocalAnalysis,
+    currentRunId,
+  } = useLocalPdfAnalysis({
+    setIsProcessing,
+    onResult: (nextHeaders, nextRows) => {
+      setHeaders(nextHeaders);
+      setRows(nextRows);
+      setProcessed(nextHeaders.length > 0 && nextRows.length > 0);
+    },
+    onError: (message) => {
+      setVerifyError(message);
+      setProcessed(false);
+    },
+  });
 
   useEffect(() => {
     if (models.length === 0) {
@@ -467,7 +159,15 @@ const PdfStructuredExtractor: React.FC = () => {
   }, [pdfUrl]);
 
   const handleFile = async (file: File) => {
-    setIsProcessing(false);
+    aiAbortControllerRef.current?.abort();
+    aiAbortControllerRef.current = null;
+    aiNextPartIndexRef.current = 0;
+    aiRowsRef.current = [];
+    aiHeadersRef.current = [];
+    currentAiLogIdRef.current = null;
+    setFocusAiLogId(null);
+    setCurrentAiLogId(null);
+
     setProcessed(false);
     setHeaders([]);
     setRows([]);
@@ -485,11 +185,13 @@ const PdfStructuredExtractor: React.FC = () => {
     setVerifyMessage('');
     setTotalParts(null);
     setProcessedParts(0);
+    setAiAnalysisState('idle');
     setHeaderCandidate(null);
     setConfirmedHeaders(null);
     setHeaderDraft(null);
     const url = URL.createObjectURL(file);
     setPdfUrl(url);
+    await startLocalAnalysis(file);
   };
 
   const handleDownloadCSV = () => {
@@ -612,112 +314,284 @@ const PdfStructuredExtractor: React.FC = () => {
     }
   };
 
-  const runFullAnalysisWithHeaders = async (headersToUse: string[]) => {
+  const runFullAnalysisWithHeaders = async (
+    headersToUse: string[],
+    resume?: { startPartIndex: number; initialProcessedParts: number; keepExisting: boolean },
+  ) => {
     if (!selectedFile) {
       setVerifyError('Selecciona un PDF primero');
       return;
     }
+
+    aiAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    aiAbortControllerRef.current = abortController;
+
     setIsAnalyzing(true);
     setIsVerifying(true);
+    setAiAnalysisState('running');
     setVerifyError('');
     setVerifyMessage('');
     setVerifyDebugLog('');
-    setAiHeaders([]);
-    setAiRows([]);
-    setAiPageRowCounts([]);
-    setDiff(null);
-    setTotalParts(null);
-    setProcessedParts(0);
-    setCurrentPage(1);
-    lastUnfilteredPageRef.current = 1;
+    if (!resume?.keepExisting) {
+      setAiHeaders([]);
+      setAiRows([]);
+      setAiPageRowCounts([]);
+      setDiff(null);
+      setTotalParts(null);
+      setProcessedParts(0);
+      setCurrentPage(1);
+      lastUnfilteredPageRef.current = 1;
+      aiRowsRef.current = [];
+      aiHeadersRef.current = [];
+      aiNextPartIndexRef.current = 0;
+    } else {
+      setProcessedParts(resume.initialProcessedParts);
+      aiNextPartIndexRef.current = resume.initialProcessedParts;
+    }
     try {
+      const runTimestamp = Date.now();
+      const existingLogId = resume?.keepExisting ? currentAiLogIdRef.current : null;
+      const logId = existingLogId || `${selectedProvider}-${runTimestamp}`;
+      if (!existingLogId) {
+        currentAiLogIdRef.current = logId;
+        setCurrentAiLogId(logId);
+      } else {
+        setCurrentAiLogId(existingLogId);
+      }
+
+      const upsertLog = (nextLog: AiExtractionLog) => {
+        settingsDb.upsertAiLog(nextLog);
+        setAiLogs(prev => [nextLog, ...prev.filter(l => l.id !== nextLog.id)]);
+        return nextLog;
+      };
+
+      const getTokensFromRequests = (requests: AiRequestLog[] | undefined) => {
+        const list = requests && Array.isArray(requests) ? requests : [];
+        let prompt = 0;
+        let completion = 0;
+        let total = 0;
+        for (const r of list) {
+          prompt += typeof r.promptTokens === 'number' ? r.promptTokens : 0;
+          completion += typeof r.completionTokens === 'number' ? r.completionTokens : 0;
+          total += typeof r.totalTokens === 'number' ? r.totalTokens : 0;
+        }
+        return { prompt, completion, total };
+      };
+
+      const existingLogs = existingLogId ? settingsDb.getAiLogs() : null;
+      const existingLog = existingLogId ? existingLogs?.find(l => l.id === existingLogId) : undefined;
+
+      let currentLog: AiExtractionLog = {
+        ...(existingLog || {}),
+        id: logId,
+        timestamp: existingLog?.timestamp ?? runTimestamp,
+        provider: selectedProvider,
+        model: effectiveModelName,
+        fileName: fileName || selectedFile.name,
+        fileSizeBytes: selectedFile.size,
+        fileType: selectedFile.type,
+        status: 'in_progress',
+        startedAt: existingLog?.startedAt ?? existingLog?.timestamp ?? runTimestamp,
+        endedAt: existingLogId ? undefined : existingLog?.endedAt,
+        requests: existingLog?.requests && Array.isArray(existingLog.requests) ? existingLog.requests : [],
+      };
+
+      if (existingLogId) {
+        currentLog = upsertLog(currentLog);
+      } else {
+        settingsDb.addAiLog(currentLog);
+        setAiLogs(prev => [currentLog, ...prev]);
+      }
+
+      const onProgress = ({
+        totalParts,
+        processedParts,
+        headers,
+        rows,
+        kind,
+        segmentId,
+        partIndex,
+        status,
+        elapsedMs,
+        usage,
+        error,
+        rowCount,
+      }: {
+        totalParts: number;
+        processedParts: number;
+        provider: 'gemini' | 'kimi';
+        headers?: string[];
+        rows?: string[][];
+        kind?: 'analyze_part';
+        segmentId?: string;
+        partIndex?: number;
+        status?: 'in_progress' | 'completed' | 'failed';
+        elapsedMs?: number;
+        usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+        error?: string;
+        rowCount?: number;
+      }) => {
+        if (typeof totalParts === 'number') {
+          setTotalParts(totalParts);
+          setProcessedParts(processedParts);
+          aiNextPartIndexRef.current = processedParts;
+        }
+        if (headers) {
+          setAiHeaders(headers);
+          aiHeadersRef.current = headers;
+        }
+        if (rows) {
+          setAiRows(prev => [...prev, ...rows]);
+          setAiPageRowCounts(prev => [...prev, rows.length]);
+          aiRowsRef.current = [...aiRowsRef.current, ...rows];
+        }
+
+        if (kind !== 'analyze_part' || !segmentId || !status) return;
+
+        const eventAt = Date.now();
+        const requestId = `${logId}:${segmentId}`;
+        const prevRequests = currentLog.requests && Array.isArray(currentLog.requests) ? currentLog.requests : [];
+        const existing = prevRequests.find(r => r.id === requestId);
+        const startedAt =
+          typeof existing?.startedAt === 'number'
+            ? existing.startedAt
+            : status === 'in_progress'
+              ? eventAt
+              : typeof elapsedMs === 'number'
+                ? eventAt - elapsedMs
+                : eventAt;
+        const endedAt = status === 'completed' || status === 'failed' ? eventAt : existing?.endedAt;
+
+        const nextReq: AiRequestLog = {
+          id: requestId,
+          kind,
+          segmentId,
+          partIndex,
+          totalParts,
+          status,
+          startedAt,
+          endedAt,
+          elapsedMs: typeof elapsedMs === 'number' ? elapsedMs : existing?.elapsedMs,
+          promptTokens: typeof usage?.promptTokens === 'number' ? usage.promptTokens : existing?.promptTokens,
+          completionTokens:
+            typeof usage?.completionTokens === 'number' ? usage.completionTokens : existing?.completionTokens,
+          totalTokens: typeof usage?.totalTokens === 'number' ? usage.totalTokens : existing?.totalTokens,
+          rowCount: typeof rowCount === 'number' ? rowCount : existing?.rowCount,
+          error: error || existing?.error,
+        };
+        const nextRequests = [nextReq, ...prevRequests.filter(r => r.id !== requestId)];
+        const tokens = getTokensFromRequests(nextRequests);
+
+        currentLog = upsertLog({
+          ...currentLog,
+          status: 'in_progress',
+          totalParts,
+          processedParts,
+          promptTokens: tokens.prompt || undefined,
+          completionTokens: tokens.completion || undefined,
+          totalTokens: tokens.total || undefined,
+          requests: nextRequests,
+        });
+      };
+
       if (selectedProvider === 'gemini') {
         const geminiKey = settingsDb.getGeminiApiKey();
         if (!geminiKey) {
+          currentLog = upsertLog({ ...currentLog, status: 'failed', endedAt: Date.now() });
           setVerifyError('API Key de Gemini no configurada (Cuenta → Configuración)');
           return;
         }
         const result = await analyzePDFWithGemini(selectedFile, geminiKey, effectiveModelName, {
           knownHeaders: headersToUse,
-          onProgress: ({ totalParts, processedParts, headers, rows }) => {
-            if (typeof totalParts === 'number') {
-              setTotalParts(totalParts);
-              setProcessedParts(processedParts);
-            }
-            if (headers) setAiHeaders(headers);
-            if (rows) {
-              setAiRows(prev => [...prev, ...rows]);
-              setAiPageRowCounts(prev => [...prev, rows.length]);
-            }
-          },
-        });
+          onProgress,
+          signal: abortController.signal,
+          startPartIndex: resume?.startPartIndex,
+          initialProcessedParts: resume?.initialProcessedParts,
+          });
         if (!result.success || !result.headers || !result.rows) {
+          if (result.error === 'ABORTED') {
+            if (currentAiLogIdRef.current !== logId) return;
+            currentLog = upsertLog({ ...currentLog, status: 'stopped', endedAt: Date.now() });
+            setVerifyMessage('Análisis detenido.');
+            setAiAnalysisState('stopped');
+            return;
+          }
+          currentLog = upsertLog({
+            ...currentLog,
+            status: 'failed',
+            endedAt: Date.now(),
+            model: result.model || effectiveModelName,
+          });
+          setAiAnalysisState('failed');
           setVerifyError(result.error || 'Error al analizar con Gemini');
           if (result.debugInfo) {
             setVerifyDebugLog(result.debugInfo);
           }
           return;
         }
-        const log: AiExtractionLog = {
-          id: `gemini-${Date.now()}`,
-          timestamp: Date.now(),
-          provider: 'gemini',
+        currentLog = upsertLog({
+          ...currentLog,
+          status: 'completed',
+          endedAt: Date.now(),
           model: result.model || effectiveModelName,
-          fileName: fileName || selectedFile.name,
-          promptTokens: result.usage?.promptTokens,
-          completionTokens: result.usage?.completionTokens,
-          totalTokens: result.usage?.totalTokens,
-        };
-        settingsDb.addAiLog(log);
-        setAiLogs(prev => [log, ...prev]);
+        });
         setAiHeaders(result.headers);
-        setDiff(computeSimpleDiff(headers, rows, result.headers, result.rows));
+        aiHeadersRef.current = result.headers;
+        setDiff(computeSimpleDiff(headers, rows, result.headers, aiRowsRef.current));
         setVerifyMessage(`Análisis completado con ${result.model || 'Gemini'}`);
+        setAiAnalysisState('completed');
       } else if (selectedProvider === 'kimi') {
         const kimiKey = settingsDb.getKimiApiKey();
         if (!kimiKey) {
+          currentLog = upsertLog({ ...currentLog, status: 'failed', endedAt: Date.now() });
           setVerifyError('API Key de Kimi no configurada (Cuenta → Configuración)');
           return;
         }
         const result = await analyzePDFWithKimi(selectedFile, kimiKey, effectiveModelName, temperature, topP, {
           knownHeaders: headersToUse,
-          onProgress: ({ totalParts, processedParts, headers, rows }) => {
-            if (typeof totalParts === 'number') {
-              setTotalParts(totalParts);
-              setProcessedParts(processedParts);
-            }
-            if (headers) setAiHeaders(headers);
-            if (rows) {
-              setAiRows(prev => [...prev, ...rows]);
-              setAiPageRowCounts(prev => [...prev, rows.length]);
-            }
-          },
+          onProgress,
+          signal: abortController.signal,
+          startPartIndex: resume?.startPartIndex,
+          initialProcessedParts: resume?.initialProcessedParts,
         });
         if (!result.success || !result.headers || !result.rows) {
+          if (result.error === 'ABORTED') {
+            if (currentAiLogIdRef.current !== logId) return;
+            currentLog = upsertLog({ ...currentLog, status: 'stopped', endedAt: Date.now() });
+            setVerifyMessage('Análisis detenido.');
+            setAiAnalysisState('stopped');
+            return;
+          }
+          currentLog = upsertLog({
+            ...currentLog,
+            status: 'failed',
+            endedAt: Date.now(),
+            model: result.model || effectiveModelName,
+          });
+          setAiAnalysisState('failed');
           setVerifyError(result.error || 'Error al analizar con Kimi');
           if (result.debugInfo) {
             setVerifyDebugLog(result.debugInfo);
           }
           return;
         }
-        const log: AiExtractionLog = {
-          id: `kimi-${Date.now()}`,
-          timestamp: Date.now(),
-          provider: 'kimi',
+        currentLog = upsertLog({
+          ...currentLog,
+          status: 'completed',
+          endedAt: Date.now(),
           model: result.model || effectiveModelName,
-          fileName: fileName || selectedFile.name,
-          promptTokens: result.usage?.promptTokens,
-          completionTokens: result.usage?.completionTokens,
-          totalTokens: result.usage?.totalTokens,
-        };
-        settingsDb.addAiLog(log);
-        setAiLogs(prev => [log, ...prev]);
+        });
         setAiHeaders(result.headers);
+        aiHeadersRef.current = result.headers;
+        setDiff(computeSimpleDiff(headers, rows, result.headers, aiRowsRef.current));
         setVerifyMessage(`Análisis completado con ${result.model || 'Kimi'}`);
+        setAiAnalysisState('completed');
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error desconocido';
       setVerifyError(msg);
+      setAiAnalysisState('failed');
       try {
         if (e instanceof Error && e.stack) {
           setVerifyDebugLog(e.stack);
@@ -758,6 +632,96 @@ const PdfStructuredExtractor: React.FC = () => {
     });
   };
 
+  const handleStopAiAnalysis = () => {
+    if (!isAnalyzing) return;
+    aiAbortControllerRef.current?.abort();
+    const logId = currentAiLogIdRef.current;
+    if (logId) {
+      const logs = settingsDb.getAiLogs();
+      const existing = logs.find(l => l.id === logId);
+      if (existing) {
+        const stopped: AiExtractionLog = { ...existing, status: 'stopped', endedAt: Date.now() };
+        settingsDb.upsertAiLog(stopped);
+        setAiLogs(prev => [stopped, ...prev.filter(l => l.id !== stopped.id)]);
+      }
+    }
+    setAiAnalysisState('stopped');
+  };
+
+  const handleResumeAiAnalysis = async () => {
+    if (!selectedFile || !confirmedHeaders) return;
+    if (aiAnalysisState !== 'stopped') return;
+    if (!currentAiLogIdRef.current) return;
+    const startPartIndex = aiNextPartIndexRef.current;
+    if (typeof totalParts === 'number' && startPartIndex >= totalParts) return;
+    await runFullAnalysisWithHeaders(confirmedHeaders, {
+      startPartIndex,
+      initialProcessedParts: startPartIndex,
+      keepExisting: true,
+    });
+  };
+
+  const handleRestartAiAnalysis = async () => {
+    if (!selectedFile || !confirmedHeaders) return;
+    aiAbortControllerRef.current?.abort();
+    const prevLogId = currentAiLogIdRef.current;
+    if (prevLogId) {
+      const prevLogs = settingsDb.getAiLogs();
+      const existing = prevLogs.find(l => l.id === prevLogId);
+      if (existing) {
+        const canceled: AiExtractionLog = { ...existing, status: 'canceled', endedAt: Date.now() };
+        settingsDb.upsertAiLog(canceled);
+        setAiLogs(prev => [canceled, ...prev.filter(l => l.id !== canceled.id)]);
+      }
+    }
+    currentAiLogIdRef.current = null;
+    setFocusAiLogId(null);
+    setCurrentAiLogId(null);
+    aiNextPartIndexRef.current = 0;
+    aiRowsRef.current = [];
+    aiHeadersRef.current = [];
+    setAiHeaders([]);
+    setAiRows([]);
+    setAiPageRowCounts([]);
+    setTotalParts(null);
+    setProcessedParts(0);
+    setDiff(null);
+    setAiAnalysisState('idle');
+    await runFullAnalysisWithHeaders(confirmedHeaders);
+  };
+
+  const handleCancelAiAnalysis = () => {
+    aiAbortControllerRef.current?.abort();
+    const logId = currentAiLogIdRef.current;
+    if (logId) {
+      settingsDb.removeAiLog(logId);
+      setAiLogs(prev => prev.filter(l => l.id !== logId));
+    }
+    currentAiLogIdRef.current = null;
+    setFocusAiLogId(null);
+    setCurrentAiLogId(null);
+    aiNextPartIndexRef.current = 0;
+    aiRowsRef.current = [];
+    aiHeadersRef.current = [];
+    setAiHeaders([]);
+    setAiRows([]);
+    setAiPageRowCounts([]);
+    setTotalParts(null);
+    setProcessedParts(0);
+    setDiff(null);
+    setVerifyError('');
+    setVerifyMessage('');
+    setVerifyDebugLog('');
+    setAiAnalysisState('idle');
+  };
+
+  const handleViewCurrentAiLogDetail = () => {
+    const logId = currentAiLogId;
+    if (!logId) return;
+    setFocusAiLogId(logId);
+    setShowHistoryIa(true);
+  };
+
   const handleAnalyzeWithAI = async () => {
     if (!selectedFile) {
       setVerifyError('Selecciona un PDF primero');
@@ -767,10 +731,14 @@ const PdfStructuredExtractor: React.FC = () => {
       await runHeaderDetection();
       return;
     }
+    if (aiAnalysisState === 'stopped') {
+      await handleResumeAiAnalysis();
+      return;
+    }
     await runFullAnalysisWithHeaders(confirmedHeaders);
   };
 
-const syncScroll = () => {
+  const syncScroll = () => {
     const source = pdfScrollRef.current;
     const target = aiScrollRef.current;
     if (!source || !target) return;
@@ -830,7 +798,7 @@ const syncScroll = () => {
     const parseDateForSort = (value: string) => {
       const v = value.trim();
       const iso = /^(\d{4})-(\d{2})-(\d{2})/;
-      const latam = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/;
+      const latam = /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/;
       const m1 = v.match(iso);
       if (m1) return new Date(Number(m1[1]), Number(m1[2]) - 1, Number(m1[3])).getTime();
       const m2 = v.match(latam);
@@ -991,38 +959,26 @@ const syncScroll = () => {
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="md:col-span-2">
-              <Label htmlFor="pdf-file">Selecciona PDF</Label>
-              <Input id="pdf-file" type="file" accept=".pdf,application/pdf" onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleFile(f);
-              }} />
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">
-                <FileType className="h-4 w-4 mr-1" />
-                {fileName || 'Sin archivo'}
-              </Badge>
-              {processed && (
-                <Badge variant="default">
-                  {rows.length} filas
-                </Badge>
-              )}
-              <Button onClick={handleDownloadCSV} disabled={!processed || headers.length === 0}>Descargar CSV</Button>
-            </div>
-          </div>
+          <PdfLocalControls
+            localProgress={localProgress}
+            localAnalysisState={localAnalysisState}
+            isProcessing={isProcessing}
+            selectedFile={selectedFile}
+            canDownloadCsv={headers.length > 0 && rows.length > 0}
+            onSelectFile={handleFile}
+            onShowHistoryIa={() => setShowHistoryIa(true)}
+            onPause={pauseLocalAnalysis}
+            onStop={stopLocalAnalysis}
+            onResume={resumeOrContinueLocalAnalysis}
+            onRestart={() => {
+              if (selectedFile) void handleFile(selectedFile);
+            }}
+            onDownloadCsv={handleDownloadCSV}
+          />
 
           <div className="border rounded-md p-3 space-y-3">
             <div className="flex items-center justify-between">
               <div className="font-semibold">Verificación con IA</div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowLogs(true)}
-              >
-                Ver historial IA
-              </Button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="md:col-span-2 space-y-3">
@@ -1226,15 +1182,53 @@ const syncScroll = () => {
                   </div>
                 </div>
               )}
-              {isAnalyzing && totalParts && totalParts > 0 && (
+              {totalParts && totalParts > 0 && aiAnalysisState !== 'idle' && (
                 <div className="space-y-1">
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>
-                      Progreso del análisis: {processedParts}/{totalParts} partes
-                    </span>
-                    <span>
-                      {Math.round((processedParts / totalParts) * 100)}%
-                    </span>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex justify-between text-xs text-muted-foreground flex-1">
+                      <span>
+                        Progreso del análisis: {processedParts}/{totalParts} partes
+                      </span>
+                      <span>
+                        {Math.round((processedParts / totalParts) * 100)}%
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="destructive" onClick={handleStopAiAnalysis} disabled={!isAnalyzing}>
+                        <Square className="h-4 w-4 mr-1" />
+                        Parar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={handleResumeAiAnalysis}
+                        disabled={aiAnalysisState !== 'stopped' || isAnalyzing}
+                      >
+                        <Play className="h-4 w-4 mr-1" />
+                        Continuar
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={handleRestartAiAnalysis} disabled={!confirmedHeaders}>
+                        <RotateCcw className="h-4 w-4 mr-1" />
+                        Reiniciar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={handleCancelAiAnalysis}
+                        disabled={aiAnalysisState === 'idle'}
+                      >
+                        <Trash2 className="h-4 w-4 mr-1" />
+                        Cancelar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleViewCurrentAiLogDetail}
+                        disabled={!currentAiLogId}
+                      >
+                        Ver detalle
+                      </Button>
+                    </div>
                   </div>
                   <Progress value={(processedParts / totalParts) * 100} />
                 </div>
@@ -1252,127 +1246,24 @@ const syncScroll = () => {
               </div>
             )}
 
-            <Dialog open={showLogs} onOpenChange={setShowLogs}>
-              <DialogContent className="max-w-3xl">
-                <DialogHeader>
-                  <DialogTitle>Historial de procesamientos IA</DialogTitle>
-                </DialogHeader>
-                <div className="text-xs text-muted-foreground mb-2">
-                  Sólo se registran las ejecuciones realizadas con Kimi.
-                </div>
-                <div className="border rounded-md max-h-72 overflow-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Fecha</TableHead>
-                        <TableHead>Archivo</TableHead>
-                        <TableHead>Proveedor</TableHead>
-                        <TableHead>Modelo</TableHead>
-                        <TableHead className="text-right">Tokens prompt</TableHead>
-                        <TableHead className="text-right">Tokens respuesta</TableHead>
-                        <TableHead className="text-right">Tokens totales</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {aiLogs.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={7} className="text-xs text-muted-foreground text-center">
-                            Aún no hay procesamientos registrados.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        aiLogs.map(log => (
-                          <TableRow key={log.id}>
-                            <TableCell className="text-xs">
-                              {new Date(log.timestamp).toLocaleString()}
-                            </TableCell>
-                            <TableCell className="text-xs">
-                              {log.fileName}
-                            </TableCell>
-                            <TableCell className="text-xs capitalize">
-                              {log.provider}
-                            </TableCell>
-                            <TableCell className="text-xs">
-                              {log.model}
-                            </TableCell>
-                            <TableCell className="text-xs text-right">
-                              {typeof log.promptTokens === 'number' ? log.promptTokens : '-'}
-                            </TableCell>
-                            <TableCell className="text-xs text-right">
-                              {typeof log.completionTokens === 'number' ? log.completionTokens : '-'}
-                            </TableCell>
-                            <TableCell className="text-xs text-right">
-                              {typeof log.totalTokens === 'number' ? log.totalTokens : '-'}
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </DialogContent>
-            </Dialog>
-            <Dialog open={showCompareModal} onOpenChange={setShowCompareModal}>
-              <DialogContent className="max-w-[95vw] w-[95vw] max-h-[90vh] flex flex-col">
-                <DialogHeader>
-                  <DialogTitle>Comparar PDF y resultado IA</DialogTitle>
-                </DialogHeader>
-                <div className="flex gap-4 h-[60vh] pt-2">
-                  <div
-                    ref={pdfScrollRef}
-                    className="flex-1 border rounded-md overflow-auto bg-muted/40"
-                    onScroll={syncScroll}
-                  >
-                    {pdfUrl ? (
-                      <iframe src={pdfUrl} className="w-full h-full" title="PDF" />
-                    ) : (
-                      <div className="p-4 text-sm text-muted-foreground">
-                        Selecciona un PDF para visualizarlo.
-                      </div>
-                    )}
-                  </div>
-                  <div
-                    ref={aiScrollRef}
-                    className="flex-1 border rounded-md overflow-auto bg-muted/40"
-                  >
-                    {aiHeaders.length > 0 ? (
-                      <div className="p-2 min-w-full pb-8">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              {aiHeaders.map((h, i) => (
-                                <TableHead key={`aih-modal-${i}`}>{h || '-'}</TableHead>
-                              ))}
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {aiRows.length === 0 ? (
-                              <TableRow>
-                                <TableCell colSpan={aiHeaders.length} className="text-center text-muted-foreground">
-                                  Sin filas
-                                </TableCell>
-                              </TableRow>
-                            ) : (
-                              aiRows.map((r, i) => (
-                                <TableRow key={`air-modal-${i}`}>
-                                  {r.map((c, j) => (
-                                    <TableCell key={`aic-modal-${i}-${j}`}>{c || '-'}</TableCell>
-                                  ))}
-                                </TableRow>
-                              ))
-                            )}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    ) : (
-                      <div className="p-4 text-sm text-muted-foreground">
-                        Ejecuta un análisis con IA para ver resultados.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
+            <AiLogsDialog
+              open={showHistoryIa}
+              onOpenChange={setShowHistoryIa}
+              aiLogs={aiLogs}
+              analysisRuns={analysisRuns}
+              currentRunId={currentRunId}
+              focusAiLogId={focusAiLogId}
+            />
+            <ComparePdfAiDialog
+              open={showCompareModal}
+              onOpenChange={setShowCompareModal}
+              pdfUrl={pdfUrl}
+              aiHeaders={aiHeaders}
+              aiRows={aiRows}
+              pdfScrollRef={pdfScrollRef}
+              aiScrollRef={aiScrollRef}
+              onPdfScroll={syncScroll}
+            />
             {aiHeaders.length > 0 && (
               <div className="border rounded-md p-3 overflow-auto max-h-[75vh]">
                 <div className="mb-2 flex items-center justify-between">

@@ -212,15 +212,82 @@ export type AiModelConfig = {
   model: string;
 };
 
+export type AiRequestLogKind = 'header_detect' | 'analyze_part';
+export type AiRequestLogStatus = 'in_progress' | 'completed' | 'failed';
+
+export type AiRequestLog = {
+  id: string;
+  kind: AiRequestLogKind;
+  segmentId: string;
+  partIndex?: number;
+  totalParts?: number;
+  status: AiRequestLogStatus;
+  startedAt: number;
+  endedAt?: number;
+  elapsedMs?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  rowCount?: number;
+  error?: string;
+  warnings?: string[];
+};
+
 export type AiExtractionLog = {
   id: string;
   timestamp: number;
   provider: AiProviderId;
   model: string;
   fileName: string;
+  fileSizeBytes?: number;
+  fileType?: string;
+  status?: 'in_progress' | 'completed' | 'failed' | 'stopped' | 'canceled';
+  startedAt?: number;
+  endedAt?: number;
+  totalParts?: number;
+  processedParts?: number;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  requests?: AiRequestLog[];
+};
+
+export type PdfAnalysisStageStatus = 'pending' | 'in_progress' | 'completed' | 'paused' | 'stopped' | 'failed';
+
+export type PdfAnalysisStage = {
+  id: string;
+  label: string;
+  status: PdfAnalysisStageStatus;
+  startedAt?: number;
+  endedAt?: number;
+  elapsedMs?: number;
+  etaMs?: number;
+  message?: string;
+  error?: string;
+  page?: number;
+  totalPages?: number;
+  part?: number;
+  totalParts?: number;
+};
+
+export type PdfAnalysisRunStatus = 'in_progress' | 'paused' | 'stopped' | 'failed' | 'completed';
+
+export type PdfAnalysisRun = {
+  id: string;
+  fileName: string;
+  mode: 'local' | 'ai';
+  status: PdfAnalysisRunStatus;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  currentStageId?: string;
+  stages: PdfAnalysisStage[];
+  resume?: {
+    nextPage?: number;
+    totalPages?: number;
+    nextPart?: number;
+    totalParts?: number;
+  };
 };
 
 interface AppSettings {
@@ -228,6 +295,7 @@ interface AppSettings {
   kimiApiKey?: string;
   aiModels?: AiModelConfig[];
   aiLogs?: AiExtractionLog[];
+  pdfAnalysisRuns?: PdfAnalysisRun[];
 }
 
 const getDefaultAiModels = (): AiModelConfig[] => [
@@ -331,9 +399,51 @@ export const settingsDb = {
     settingsDb.saveSettings(settings);
   },
 
+  upsertAiLog: (log: AiExtractionLog) => {
+    const settings = settingsDb.getSettings();
+    const existing = settings.aiLogs && Array.isArray(settings.aiLogs) ? settings.aiLogs : [];
+    const next = [log, ...existing.filter(l => l.id !== log.id)].slice(0, 200);
+    settings.aiLogs = next;
+    settingsDb.saveSettings(settings);
+  },
+
+  removeAiLog: (logId: string) => {
+    const settings = settingsDb.getSettings();
+    const existing = settings.aiLogs && Array.isArray(settings.aiLogs) ? settings.aiLogs : [];
+    settings.aiLogs = existing.filter(l => l.id !== logId);
+    settingsDb.saveSettings(settings);
+  },
+
   clearAiLogs: () => {
     const settings = settingsDb.getSettings();
     settings.aiLogs = [];
+    settingsDb.saveSettings(settings);
+  },
+
+  getPdfAnalysisRuns: (): PdfAnalysisRun[] => {
+    const settings = settingsDb.getSettings();
+    const runs = settings.pdfAnalysisRuns;
+    if (!runs || !Array.isArray(runs) || runs.length === 0) return [];
+    return runs;
+  },
+
+  savePdfAnalysisRuns: (runs: PdfAnalysisRun[]) => {
+    const settings = settingsDb.getSettings();
+    settings.pdfAnalysisRuns = runs;
+    settingsDb.saveSettings(settings);
+  },
+
+  upsertPdfAnalysisRun: (run: PdfAnalysisRun) => {
+    const settings = settingsDb.getSettings();
+    const existing = settings.pdfAnalysisRuns && Array.isArray(settings.pdfAnalysisRuns) ? settings.pdfAnalysisRuns : [];
+    const next = [run, ...existing.filter(r => r.id !== run.id)].slice(0, 50);
+    settings.pdfAnalysisRuns = next;
+    settingsDb.saveSettings(settings);
+  },
+
+  clearPdfAnalysisRuns: () => {
+    const settings = settingsDb.getSettings();
+    settings.pdfAnalysisRuns = [];
     settingsDb.saveSettings(settings);
   },
 };

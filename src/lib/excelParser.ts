@@ -36,7 +36,7 @@ const detectColumnType = (normalizedName: string): string | null => {
 };
 
 // Función para parsear una fecha en diferentes formatos
-const parseDate = (dateValue: any): string => {
+const parseDate = (dateValue: unknown): string => {
   if (!dateValue) return new Date().toISOString().split('T')[0];
 
   // Si es un número (fecha de Excel)
@@ -56,11 +56,11 @@ const parseDate = (dateValue: any): string => {
   // Intentar diferentes formatos
   const formats = [
     // DD/MM/YYYY o DD-MM-YYYY
-    /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/,
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/,
     // YYYY/MM/DD o YYYY-MM-DD
-    /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/,
+    /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/,
     // MM/DD/YYYY
-    /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/,
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/,
   ];
 
   for (const format of formats) {
@@ -98,7 +98,7 @@ const parseDate = (dateValue: any): string => {
 };
 
 // Función para parsear un monto
-const parseAmount = (amountValue: any): number => {
+const parseAmount = (amountValue: unknown): number => {
   if (amountValue === null || amountValue === undefined || amountValue === '') return 0;
 
   // Si ya es un número
@@ -168,7 +168,7 @@ export const parseExcelFile = async (
         const worksheet = workbook.Sheets[firstSheetName];
 
         // Convertir a JSON
-        const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet, { 
+        const jsonData: unknown[] = XLSX.utils.sheet_to_json(worksheet, { 
           header: 1, 
           raw: false,
           defval: '' 
@@ -222,7 +222,7 @@ export const parseExcelFile = async (
         const transactions: Transaction[] = [];
 
         for (let i = 1; i < jsonData.length; i++) {
-          const row = jsonData[i] as any[];
+          const row = jsonData[i] as unknown[];
           
           if (!row || row.length < headers.length - 1) continue; // Saltar líneas incompletas
 

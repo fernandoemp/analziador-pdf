@@ -32,8 +32,12 @@ export const convertPDFToExcel = async (pdfFile: File): Promise<ConversionResult
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item: any) => item.str)
+      const pageText = (textContent.items as unknown[])
+        .map((item) => {
+          if (typeof item !== 'object' || item === null) return '';
+          const maybeStr = (item as { str?: unknown }).str;
+          return typeof maybeStr === 'string' ? maybeStr : '';
+        })
         .join(' ');
       fullText += pageText + '\n';
     }
@@ -85,7 +89,7 @@ export const convertPDFToExcel = async (pdfFile: File): Promise<ConversionResult
 
     // Extraer filas de datos
     const dataLines = lines.slice(headerIndex + 1);
-    const rows: any[][] = [];
+    const rows: string[][] = [];
 
     // Agregar encabezados como primera fila
     rows.push(headers);
@@ -152,11 +156,14 @@ export const convertPDFToExcel = async (pdfFile: File): Promise<ConversionResult
       columnCount: headers.length
     };
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error al convertir PDF a Excel:', error);
     return {
       success: false,
-      error: error.message || 'Error desconocido al convertir PDF'
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Error desconocido al convertir PDF'
     };
   }
 };

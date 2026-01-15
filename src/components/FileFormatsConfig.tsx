@@ -48,14 +48,42 @@ interface FileFormatsConfigProps {
   onChange: (formats: FileFormatConfig[]) => void;
 }
 
+type FileAnalysisColumn = {
+  columnName: string;
+  suggestedType: string | null;
+  confidence: number;
+  sampleValues: string[];
+};
+
+type FileAnalysisResult = {
+  headers: string[];
+  columnAnalysis: FileAnalysisColumn[];
+  suggestedMapping: BankColumnMapping;
+  rowCount: number;
+  preview: Record<string, unknown>[];
+};
+
 const FileFormatsConfig: React.FC<FileFormatsConfigProps> = ({ formats, onChange }) => {
   const [expandedFormat, setExpandedFormat] = useState<string>('');
   const [analyzingIndex, setAnalyzingIndex] = useState<number | null>(null);
-  const [analysisResult, setAnalysisResult] = useState<any>(null);
+  const [analysisResult, setAnalysisResult] = useState<FileAnalysisResult | null>(null);
   const [convertToExcel, setConvertToExcel] = useState<boolean>(false);
   const [convertedExcelFile, setConvertedExcelFile] = useState<File | null>(null);
   const [showAnalysisDialog, setShowAnalysisDialog] = useState(false);
   const fileInputRefs = useRef<{ [key: number]: HTMLInputElement | null }>({});
+  const analysisAbortRef = useRef<AbortController | null>(null);
+  const analysisToastIdRef = useRef<string | number | null>(null);
+
+  const cancelAnalysis = () => {
+    analysisAbortRef.current?.abort();
+    analysisAbortRef.current = null;
+    if (analysisToastIdRef.current) {
+      dismissToast(analysisToastIdRef.current as string);
+      analysisToastIdRef.current = null;
+    }
+    setAnalyzingIndex(null);
+    showError('Análisis cancelado');
+  };
 
   const getFormatIcon = (format: FileFormatType) => {
     switch (format) {
@@ -110,11 +138,18 @@ const FileFormatsConfig: React.FC<FileFormatsConfigProps> = ({ formats, onChange
 
     const isPDF = file.name.toLowerCase().endsWith('.pdf');
     setAnalyzingIndex(index);
+    analysisAbortRef.current?.abort();
+    const abortController = new AbortController();
+    analysisAbortRef.current = abortController;
     
     let fileToAnalyze = file;
     let toastId: string | number;
 
     try {
+      if (abortController.signal.aborted) {
+        setAnalyzingIndex(null);
+        return;
+      }
       // Si es PDF y se debe convertir a Excel
       if (isPDF && convertToExcel) {
         // Verificar si hay API Key de Gemini configurada
@@ -123,17 +158,26 @@ const FileFormatsConfig: React.FC<FileFormatsConfigProps> = ({ formats, onChange
         if (geminiApiKey) {
           // Usar conversión con IA
           toastId = showLoading('Convirtiendo PDF a Excel con IA...');
+          analysisToastIdRef.current = toastId;
           
           const conversionResult = await convertPDFToExcelWithAI(file, geminiApiKey);
+          if (abortController.signal.aborted) {
+            dismissToast(toastId as string);
+            analysisToastIdRef.current = null;
+            setAnalyzingIndex(null);
+            return;
+          }
           
           if (!conversionResult.success || !conversionResult.excelFile) {
             dismissToast(toastId as string);
+            analysisToastIdRef.current = null;
             showError(`Error al convertir con IA: ${conversionResult.error}`);
             setAnalyzingIndex(null);
             return;
           }
 
           dismissToast(toastId as string);
+          analysisToastIdRef.current = null;
           showSuccess(`✨ PDF convertido con IA: ${conversionResult.rowCount} filas, ${conversionResult.columnCount} columnas`);
           
           fileToAnalyze = conversionResult.excelFile;
@@ -141,17 +185,26 @@ const FileFormatsConfig: React.FC<FileFormatsConfigProps> = ({ formats, onChange
         } else {
           // Usar conversión tradicional
           toastId = showLoading('Convirtiendo PDF a Excel...');
+          analysisToastIdRef.current = toastId;
           
           const conversionResult = await convertPDFToExcel(file);
+          if (abortController.signal.aborted) {
+            dismissToast(toastId as string);
+            analysisToastIdRef.current = null;
+            setAnalyzingIndex(null);
+            return;
+          }
           
           if (!conversionResult.success || !conversionResult.excelFile) {
             dismissToast(toastId as string);
+            analysisToastIdRef.current = null;
             showError(`Error al convertir: ${conversionResult.error}`);
             setAnalyzingIndex(null);
             return;
           }
 
           dismissToast(toastId as string);
+          analysisToastIdRef.current = null;
           showSuccess(`PDF convertido: ${conversionResult.rowCount} filas, ${conversionResult.columnCount} columnas`);
           
           fileToAnalyze = conversionResult.excelFile;
@@ -159,18 +212,37 @@ const FileFormatsConfig: React.FC<FileFormatsConfigProps> = ({ formats, onChange
         }
       }
 
+      if (abortController.signal.aborted) {
+        setAnalyzingIndex(null);
+        return;
+      }
       // Analizar el archivo (original o convertido)
       toastId = showLoading('Analizando archivo...');
+      analysisToastIdRef.current = toastId;
       const result = await analyzeFile(fileToAnalyze);
-      setAnalysisResult(result);
+      if (abortController.signal.aborted) {
+        dismissToast(toastId as string);
+        analysisToastIdRef.current = null;
+        setAnalyzingIndex(null);
+        return;
+      }
+      setAnalysisResult(result as FileAnalysisResult);
       setShowAnalysisDialog(true);
       dismissToast(toastId as string);
+      analysisToastIdRef.current = null;
       showSuccess(`Archivo analizado: ${result.headers.length} columnas detectadas`);
-    } catch (error: any) {
-      dismissToast(toastId! as string);
-      showError(`Error al analizar: ${error.message}`);
+    } catch (error: unknown) {
+      if (analysisToastIdRef.current) {
+        dismissToast(analysisToastIdRef.current as string);
+        analysisToastIdRef.current = null;
+      }
+      const message = error instanceof Error ? error.message : 'Error desconocido';
+      showError(`Error al analizar: ${message}`);
       setAnalyzingIndex(null);
     } finally {
+      if (analysisAbortRef.current === abortController) {
+        analysisAbortRef.current = null;
+      }
       // Reset file input
       if (fileInputRefs.current[index]) {
         fileInputRefs.current[index]!.value = '';
@@ -338,6 +410,11 @@ const FileFormatsConfig: React.FC<FileFormatsConfigProps> = ({ formats, onChange
                               <Sparkles className="h-4 w-4 mr-2" />
                               {analyzingIndex === index ? 'Analizando...' : 'Analizar Archivo'}
                             </Button>
+                            {analyzingIndex === index && (
+                              <Button variant="destructive" size="sm" onClick={cancelAnalysis}>
+                                Detener
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -429,7 +506,7 @@ const FileFormatsConfig: React.FC<FileFormatsConfigProps> = ({ formats, onChange
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {analysisResult.columnAnalysis.map((col: any, idx: number) => (
+                      {analysisResult.columnAnalysis.map((col: FileAnalysisColumn, idx: number) => (
                         <TableRow key={idx}>
                           <TableCell className="font-medium">{col.columnName}</TableCell>
                           <TableCell>
@@ -470,11 +547,11 @@ const FileFormatsConfig: React.FC<FileFormatsConfigProps> = ({ formats, onChange
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {analysisResult.preview.map((row: any, idx: number) => (
+                      {analysisResult.preview.map((row: Record<string, unknown>, idx: number) => (
                         <TableRow key={idx}>
                           {analysisResult.headers.map((header: string, colIdx: number) => (
                             <TableCell key={colIdx} className="text-sm">
-                              {row[header] || '-'}
+                              {String(row[header] ?? '-')}
                             </TableCell>
                           ))}
                         </TableRow>

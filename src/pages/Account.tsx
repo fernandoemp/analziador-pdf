@@ -33,16 +33,29 @@ import { Key, Eye, EyeOff, CheckCircle2, AlertCircle } from 'lucide-react';
 // Simulación de localStorage para usuarios
 const USERS_KEY = 'finanzas360_users';
 
-const getUsers = () => {
+type UserRole = 'admin' | 'user' | 'viewer';
+
+type StoredUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  status: 'active' | 'inactive';
+  created_date: string;
+};
+
+const getUsers = (): StoredUser[] => {
   try {
     const data = localStorage.getItem(USERS_KEY);
-    return data ? JSON.parse(data) : [];
+    if (!data) return [];
+    const parsed: unknown = JSON.parse(data);
+    return Array.isArray(parsed) ? (parsed as StoredUser[]) : [];
   } catch {
     return [];
   }
 };
 
-const saveUsers = (users: any[]) => {
+const saveUsers = (users: StoredUser[]) => {
   localStorage.setItem(USERS_KEY, JSON.stringify(users));
 };
 
@@ -96,13 +109,13 @@ const Account: React.FC = () => {
 
 // Componente de gestión de usuarios
 const UsersManagement: React.FC = () => {
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<StoredUser[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState<any>(null);
+  const [editingUser, setEditingUser] = useState<StoredUser | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
-    role: 'user',
+    role: 'user' as UserRole,
   });
 
   useEffect(() => {
@@ -114,7 +127,7 @@ const UsersManagement: React.FC = () => {
     setUsers(loadedUsers);
   };
 
-  const handleOpenDialog = (user?: any) => {
+  const handleOpenDialog = (user?: StoredUser) => {
     if (user) {
       setEditingUser(user);
       setFormData({
@@ -174,7 +187,7 @@ const UsersManagement: React.FC = () => {
     setDialogOpen(false);
   };
 
-  const handleToggleStatus = (user: any) => {
+  const handleToggleStatus = (user: StoredUser) => {
     const allUsers = getUsers();
     const updatedUsers = allUsers.map(u =>
       u.id === user.id
@@ -186,13 +199,13 @@ const UsersManagement: React.FC = () => {
     loadUsers();
   };
 
-  const getRoleBadge = (role: string) => {
-    const colors: any = {
+  const getRoleBadge = (role: UserRole) => {
+    const colors: Record<UserRole, string> = {
       admin: 'bg-purple-600',
       user: 'bg-blue-600',
       viewer: 'bg-gray-600',
     };
-    const labels: any = {
+    const labels: Record<UserRole, string> = {
       admin: 'Administrador',
       user: 'Usuario',
       viewer: 'Visualizador',

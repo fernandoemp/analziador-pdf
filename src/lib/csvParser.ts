@@ -93,11 +93,11 @@ const parseDate = (dateStr: string): string => {
   // Intentar diferentes formatos
   const formats = [
     // DD/MM/YYYY o DD-MM-YYYY
-    /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/,
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/,
     // YYYY/MM/DD o YYYY-MM-DD
-    /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/,
+    /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/,
     // MM/DD/YYYY
-    /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/,
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/,
   ];
 
   for (const format of formats) {
@@ -231,7 +231,7 @@ const processCSV = (
   bankName: string,
   columnMapping: BankColumnMapping | undefined,
   resolve: (value: Transaction[]) => void,
-  reject: (reason?: any) => void
+  reject: (reason?: unknown) => void
 ) => {
   try {
         const lines = text.split(/\r?\n/).filter(line => line.trim());
