@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const STORAGE_PREFIX = 'pdfStructuredExtractor.aiAnalysis';
 const ACTIVE_SESSION_ID_KEY = `${STORAGE_PREFIX}.activeSessionId`;
+const VALIDATOR_PREFIX = 'pdfStructuredExtractor.validator';
 
 const fileFingerprintSchema = z.object({
   name: z.string(),
@@ -172,3 +173,127 @@ export const isQuotaExceededError = (error: unknown) => {
   return maybe.name === 'QuotaExceededError' || maybe.code === 22;
 };
 
+const persistedValidatorStateV1Schema = z.object({
+  version: z.literal(1),
+  updatedAt: z.number().nonnegative(),
+  file: fileFingerprintSchema,
+  totalPages: z.number().int().nonnegative(),
+  currentPage: z.number().int().nonnegative(),
+  validatedPages: z.array(z.boolean()),
+});
+
+export type PersistedValidatorStateV1 = z.infer<typeof persistedValidatorStateV1Schema>;
+
+const validatorKey = (fingerprint: FileFingerprint) => {
+  const safeName = encodeURIComponent(fingerprint.name);
+  const safeType = encodeURIComponent(fingerprint.type || '');
+  return `${VALIDATOR_PREFIX}.v1.${safeName}.${fingerprint.size}.${fingerprint.lastModified}.${safeType}`;
+};
+
+export const normalizeValidatorState = (
+  state: PersistedValidatorStateV1,
+  totalPages: number
+): PersistedValidatorStateV1 => {
+  const safeTotalPages = Math.max(0, Math.floor(totalPages));
+  const nextValidated = state.validatedPages.slice(0, safeTotalPages);
+  while (nextValidated.length < safeTotalPages) nextValidated.push(false);
+  const safeCurrentPage = Math.max(1, Math.min(safeTotalPages || 1, Math.floor(state.currentPage || 1)));
+  return {
+    ...state,
+    totalPages: safeTotalPages,
+    currentPage: safeCurrentPage,
+    validatedPages: nextValidated,
+  };
+};
+
+export const loadValidatorState = (fingerprint: FileFingerprint): PersistedValidatorStateV1 | null => {
+  const storage = getStorage();
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(validatorKey(fingerprint));
+    if (!raw) return null;
+    const parsed = safeParseJson(raw);
+    if (!parsed.ok) return null;
+    const validated = persistedValidatorStateV1Schema.safeParse(parsed.value);
+    return validated.success ? validated.data : null;
+  } catch {
+    return null;
+  }
+};
+
+export const saveValidatorState = (state: PersistedValidatorStateV1) => {
+  const storage = getStorage();
+  if (!storage) return;
+  storage.setItem(validatorKey(state.file), JSON.stringify(state));
+};
+
+export const removeValidatorState = (fingerprint: FileFingerprint) => {
+  const storage = getStorage();
+  if (!storage) return;
+  storage.removeItem(validatorKey(fingerprint));
+};
+
+export const cleanupValidatorStates = ({
+  maxEntries,
+  maxAgeMs,
+  now,
+}: {
+  maxEntries: number;
+  maxAgeMs: number;
+  now?: number;
+}) => {
+  const storage = getStorage();
+  if (!storage) return;
+  const safeNow = typeof now === 'number' && Number.isFinite(now) ? now : Date.now();
+  const safeMaxEntries = Math.max(0, Math.floor(maxEntries));
+  const safeMaxAgeMs = Math.max(0, Math.floor(maxAgeMs));
+  const prefix = `${VALIDATOR_PREFIX}.v1.`;
+
+  const entries: Array<{ key: string; updatedAt: number }> = [];
+  const toDelete: string[] = [];
+
+  for (let i = 0; i < storage.length; i += 1) {
+    const key = storage.key(i);
+    if (!key || !key.startsWith(prefix)) continue;
+    const raw = storage.getItem(key);
+    if (!raw) {
+      toDelete.push(key);
+      continue;
+    }
+    const parsed = safeParseJson(raw);
+    if (!parsed.ok) {
+      toDelete.push(key);
+      continue;
+    }
+    const validated = persistedValidatorStateV1Schema.safeParse(parsed.value);
+    if (!validated.success) {
+      toDelete.push(key);
+      continue;
+    }
+    const updatedAt = validated.data.updatedAt;
+    if (!Number.isFinite(updatedAt) || updatedAt < 0) {
+      toDelete.push(key);
+      continue;
+    }
+    if (safeMaxAgeMs > 0 && updatedAt < safeNow - safeMaxAgeMs) {
+      toDelete.push(key);
+      continue;
+    }
+    entries.push({ key, updatedAt });
+  }
+
+  entries.sort((a, b) => b.updatedAt - a.updatedAt);
+  if (safeMaxEntries > 0 && entries.length > safeMaxEntries) {
+    for (const e of entries.slice(safeMaxEntries)) {
+      toDelete.push(e.key);
+    }
+  }
+
+  for (const key of toDelete) {
+    try {
+      storage.removeItem(key);
+    } catch {
+      continue;
+    }
+  }
+};

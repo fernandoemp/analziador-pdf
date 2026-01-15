@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { AiLogsDialog } from '@/components/pdf-structured-extractor/AiLogsDialog';
-import { ComparePdfAiDialog } from '@/components/pdf-structured-extractor/ComparePdfAiDialog';
+import { PdfValidatorDialog } from '@/components/pdf-structured-extractor/ComparePdfAiDialog';
 import { AiAnalysisResumeBanner } from '@/components/pdf-structured-extractor/AiAnalysisResumeBanner';
 import { AiHeaderCandidateEditor } from '@/components/pdf-structured-extractor/AiHeaderCandidateEditor';
 import { AiProgressControls } from '@/components/pdf-structured-extractor/AiProgressControls';
@@ -29,6 +29,7 @@ import { LocalStorageMonitor } from '@/components/pdf-structured-extractor/Local
 import { PdfLocalControls } from '@/components/pdf-structured-extractor/PdfLocalControls';
 import { useAiPdfVerification } from '@/hooks/useAiPdfVerification';
 import { useLocalPdfAnalysis } from '@/hooks/useLocalPdfAnalysis';
+import { getFileFingerprint, loadValidatorState, normalizeValidatorState } from '@/lib/ai-analysis-persistence/storage';
 import { showSuccess } from '@/utils/toast';
 
 const ADVANCED_AI_SETTINGS_STORAGE_KEY = 'pdf-structured-extractor:advanced-ai-settings:v1';
@@ -41,7 +42,8 @@ const PdfStructuredExtractor: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
-  const [showCompareModal, setShowCompareModal] = useState<boolean>(false);
+  const [showValidatorModal, setShowValidatorModal] = useState<boolean>(false);
+  const [validatorProgress, setValidatorProgress] = useState<{ validated: number; total: number } | null>(null);
 
   const pdfScrollRef = useRef<HTMLDivElement | null>(null);
   const aiScrollRef = useRef<HTMLDivElement | null>(null);
@@ -120,6 +122,80 @@ const PdfStructuredExtractor: React.FC = () => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
+
+  const aiResultsTableProps = {
+    aiHeaders: ai.aiHeaders,
+    aiRows: ai.aiRows,
+    hasActiveFilters: ai.hasActiveFilters,
+    isFilterPending: ai.isFilterPending,
+    visibleRowIndices: ai.visibleRowIndices,
+    descriptionFilter: ai.descriptionFilter,
+    descriptionColIndex: ai.descriptionColIndex,
+    onChangeDescriptionFilter: ai.handleDescriptionFilterChange,
+    onClearFilters: ai.clearFilters,
+    dateColIndex: ai.dateColIndex ?? null,
+    dateOptions: ai.dateOptions,
+    selectedDatesSet: ai.selectedDatesSet,
+    normalizedQuery: ai.normalizedQuery,
+    onToggleDateSelection: ai.toggleDateSelection,
+    missingSelectedDatesCount: ai.missingSelectedDatesCount,
+    invalidRows: ai.invalidRows,
+    safeCurrentPage: ai.safeCurrentPage,
+    totalPages: ai.totalPages,
+    onPrevPage: () => ai.setCurrentPage(ai.safeCurrentPage - 1),
+    onNextPage: () => ai.setCurrentPage(ai.safeCurrentPage + 1),
+    dateFilterPresentation: 'popover' as const,
+    onDownloadCsv: ai.handleDownloadAiCSV,
+    onRequestDeleteColumn: ai.requestDeleteColumn,
+    onAddRowAfter: ai.addRowAfter,
+    onDeleteRow: ai.deleteRow,
+    editingCell: ai.editingCell,
+    onChangeEditingValue: ai.handleChangeEditingValue,
+    onSaveEditCell: ai.saveEditCell,
+    onCancelEditCell: ai.cancelEditCell,
+    onStartEditCell: ai.startEditCell,
+  };
+
+  const validatorAiResultsTableProps = {
+    ...aiResultsTableProps,
+    showCsvExport: false,
+    showDescriptionFilter: false,
+    dateFilterPresentation: 'popover' as const,
+    showPagination: false,
+  };
+
+  const selectedFileFingerprint = React.useMemo(() => (selectedFile ? getFileFingerprint(selectedFile) : null), [selectedFile]);
+  const validatorFingerprint = React.useMemo(
+    () => selectedFileFingerprint ?? ai.hydratedAiSession?.meta.file ?? null,
+    [ai.hydratedAiSession?.meta.file, selectedFileFingerprint]
+  );
+
+  const validatorTotalPages = Math.max(0, Math.floor(ai.totalPages));
+
+  useEffect(() => {
+    if (!validatorFingerprint || validatorTotalPages <= 0) {
+      setValidatorProgress(null);
+      return;
+    }
+
+    const compute = () => {
+      const stored = loadValidatorState(validatorFingerprint);
+      if (!stored) {
+        setValidatorProgress({ validated: 0, total: validatorTotalPages });
+        return;
+      }
+      const normalized = normalizeValidatorState(stored, validatorTotalPages);
+      const validated = normalized.validatedPages.reduce((acc, v) => acc + (v ? 1 : 0), 0);
+      setValidatorProgress({ validated, total: normalized.totalPages });
+    };
+
+    compute();
+
+    if (!showValidatorModal) return;
+
+    const intervalId = window.setInterval(compute, 500);
+    return () => window.clearInterval(intervalId);
+  }, [showValidatorModal, validatorFingerprint, validatorTotalPages]);
 
   const selectedMatchesStored =
     !!selectedFile && !!ai.hydratedAiSession && ai.matchesActiveFile(selectedFile);
@@ -290,22 +366,30 @@ const PdfStructuredExtractor: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="mt-4 flex flex-col gap-2">
-              <div className="flex items-end gap-2">
-                <Button variant="secondary" onClick={ai.handleAnalyzeWithAI} disabled={!selectedFile || ai.isAnalyzing}>
-                  {ai.isAnalyzing
-                    ? 'Analizando...'
+              <div className="mt-4 flex flex-col gap-2">
+                <div className="flex items-end gap-2">
+                  <Button variant="secondary" onClick={ai.handleAnalyzeWithAI} disabled={!selectedFile || ai.isAnalyzing}>
+                    {ai.isAnalyzing
+                      ? 'Analizando...'
                     : ai.confirmedHeaders
                       ? 'Analizar movimientos con IA'
                       : 'Detectar encabezado con IA'}
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => setShowCompareModal(true)}
-                  disabled={!selectedFile || ai.aiHeaders.length === 0}
+                  onClick={() => setShowValidatorModal(true)}
+                  disabled={ai.aiHeaders.length === 0}
                 >
-                  Ver PDF vs resultado IA
+                  Validador
                 </Button>
+                {validatorProgress && ai.aiHeaders.length > 0 && (
+                  <Badge
+                    variant={validatorProgress.total > 0 && validatorProgress.validated >= validatorProgress.total ? 'secondary' : 'outline'}
+                    className="text-xs"
+                  >
+                    Validación: {validatorProgress.validated}/{validatorProgress.total || 1}
+                  </Badge>
+                )}
               </div>
 
               {ai.headerCandidate && !ai.confirmedHeaders && (
@@ -360,49 +444,20 @@ const PdfStructuredExtractor: React.FC = () => {
               focusAiLogId={ai.focusAiLogId}
             />
 
-            <ComparePdfAiDialog
-              open={showCompareModal}
-              onOpenChange={setShowCompareModal}
+            <PdfValidatorDialog
+              open={showValidatorModal}
+              onOpenChange={setShowValidatorModal}
               pdfUrl={pdfUrl}
-              aiHeaders={ai.aiHeaders}
-              aiRows={ai.aiRows}
+              fileFingerprint={validatorFingerprint}
+              aiTableProps={validatorAiResultsTableProps}
+              onSetCurrentPage={ai.setCurrentPage}
               pdfScrollRef={pdfScrollRef}
               aiScrollRef={aiScrollRef}
               onPdfScroll={syncScroll}
             />
 
             {ai.aiHeaders.length > 0 && (
-              <AiResultsTable
-                aiHeaders={ai.aiHeaders}
-                aiRows={ai.aiRows}
-                hasActiveFilters={ai.hasActiveFilters}
-                isFilterPending={ai.isFilterPending}
-                visibleRowIndices={ai.visibleRowIndices}
-                descriptionFilter={ai.descriptionFilter}
-                descriptionColIndex={ai.descriptionColIndex}
-                onChangeDescriptionFilter={ai.handleDescriptionFilterChange}
-                onClearFilters={ai.clearFilters}
-                dateColIndex={ai.dateColIndex ?? null}
-                dateOptions={ai.dateOptions}
-                selectedDatesSet={ai.selectedDatesSet}
-                normalizedQuery={ai.normalizedQuery}
-                onToggleDateSelection={ai.toggleDateSelection}
-                missingSelectedDatesCount={ai.missingSelectedDatesCount}
-                invalidRows={ai.invalidRows}
-                safeCurrentPage={ai.safeCurrentPage}
-                totalPages={ai.totalPages}
-                onPrevPage={() => ai.setCurrentPage(ai.safeCurrentPage - 1)}
-                onNextPage={() => ai.setCurrentPage(ai.safeCurrentPage + 1)}
-                onDownloadCsv={ai.handleDownloadAiCSV}
-                onRequestDeleteColumn={ai.requestDeleteColumn}
-                onAddRowAfter={ai.addRowAfter}
-                onDeleteRow={ai.deleteRow}
-                editingCell={ai.editingCell}
-                onChangeEditingValue={ai.handleChangeEditingValue}
-                onSaveEditCell={ai.saveEditCell}
-                onCancelEditCell={ai.cancelEditCell}
-                onStartEditCell={ai.startEditCell}
-              />
+              <AiResultsTable {...aiResultsTableProps} />
             )}
 
             <AlertDialog
