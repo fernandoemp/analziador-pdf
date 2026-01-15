@@ -21,7 +21,7 @@ interface FileAnalysisResult {
   columnAnalysis: ColumnAnalysis[];
   suggestedMapping: BankColumnMapping;
   rowCount: number;
-  preview: any[];
+  preview: Record<string, unknown>[];
 }
 
 // Función para normalizar nombres de columnas
@@ -87,13 +87,13 @@ const validateColumnType = (type: string, sampleValues: string[]): boolean => {
     case 'date':
     case 'dateValue':
       // Verificar si parece una fecha
-      return nonEmptyValues.some(v => /\d{1,4}[\/\-]\d{1,2}[\/\-]\d{1,4}/.test(v));
+      return nonEmptyValues.some(v => /\d{1,4}[/-]\d{1,2}[/-]\d{1,4}/.test(v));
     
     case 'credit':
     case 'debit':
     case 'amount':
       // Verificar si parece un número
-      return nonEmptyValues.some(v => /^[\d\s,.\-()$€£¥₡]+$/.test(v.trim()));
+      return nonEmptyValues.some(v => /^[\d\s,.()$€£¥₡-]+$/.test(v.trim()));
     
     case 'description':
     case 'detail':
@@ -163,7 +163,7 @@ const analyzeCSV = async (file: File): Promise<FileAnalysisResult> => {
 
         // Crear preview
         const preview = sampleRows.slice(0, 5).map(row => {
-          const obj: any = {};
+          const obj: Record<string, unknown> = {};
           headers.forEach((header, index) => {
             obj[header] = row[index] || '';
           });
@@ -198,19 +198,22 @@ const analyzeExcel = async (file: File): Promise<FileAnalysisResult> => {
         const workbook = XLSX.read(data, { type: 'array' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        const jsonData: unknown[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
         if (jsonData.length < 2) {
           reject(new Error('El archivo está vacío o no tiene suficientes datos'));
           return;
         }
 
-        const headers = jsonData[0].map((h: any) => String(h || '').trim());
-        const sampleRows = jsonData.slice(1, Math.min(6, jsonData.length));
+        const headers = (jsonData[0] as unknown[]).map((h) => String(h ?? '').trim());
+        const sampleRows = jsonData.slice(1, Math.min(6, jsonData.length)) as unknown[];
 
         // Analizar cada columna
         const columnAnalysis: ColumnAnalysis[] = headers.map((header: string, index: number) => {
-          const sampleValues = sampleRows.map(row => String(row[index] || ''));
+          const sampleValues = sampleRows.map((row) => {
+            const rowArray = Array.isArray(row) ? row : [];
+            return String(rowArray[index] ?? '');
+          });
           const { type, confidence } = detectColumnTypeWithConfidence(header, sampleValues);
           
           return {
@@ -230,10 +233,11 @@ const analyzeExcel = async (file: File): Promise<FileAnalysisResult> => {
         });
 
         // Crear preview
-        const preview = sampleRows.slice(0, 5).map(row => {
-          const obj: any = {};
+        const preview = sampleRows.slice(0, 5).map((row) => {
+          const obj: Record<string, unknown> = {};
+          const rowArray = Array.isArray(row) ? row : [];
           headers.forEach((header: string, index: number) => {
-            obj[header] = row[index] || '';
+            obj[header] = rowArray[index] ?? '';
           });
           return obj;
         });
@@ -271,8 +275,12 @@ const analyzePDF = async (file: File): Promise<FileAnalysisResult> => {
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item: any) => item.str)
+      const pageText = (textContent.items as unknown[])
+        .map((item) => {
+          if (typeof item !== 'object' || item === null) return '';
+          const maybeStr = (item as { str?: unknown }).str;
+          return typeof maybeStr === 'string' ? maybeStr : '';
+        })
         .join(' ');
       fullText += pageText + '\n';
     }
@@ -345,7 +353,7 @@ const analyzePDF = async (file: File): Promise<FileAnalysisResult> => {
 
     // Crear preview
     const preview = sampleRows.slice(0, 5).map(row => {
-      const obj: any = {};
+      const obj: Record<string, unknown> = {};
       headers.forEach((header, index) => {
         obj[header] = row[index] || '';
       });
@@ -359,8 +367,9 @@ const analyzePDF = async (file: File): Promise<FileAnalysisResult> => {
       rowCount: sampleLines.length,
       preview,
     };
-  } catch (error: any) {
-    throw new Error(`Error al procesar PDF: ${error.message || 'No se pudo analizar el PDF'}`);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'No se pudo analizar el PDF';
+    throw new Error(`Error al procesar PDF: ${message}`);
   }
 };
 

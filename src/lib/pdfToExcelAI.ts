@@ -30,11 +30,29 @@ type PdfAnalysisProgress = {
   provider: 'gemini' | 'kimi';
   headers?: string[];
   rows?: string[][];
+  kind?: 'analyze_part';
+  segmentId?: string;
+  partIndex?: number;
+  status?: 'in_progress' | 'completed' | 'failed';
+  elapsedMs?: number;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+  };
+  error?: string;
+  rowCount?: number;
 };
 
 type PdfAnalysisOptions = {
   onProgress?: (progress: PdfAnalysisProgress) => void;
   knownHeaders?: string[];
+  signal?: AbortSignal;
+  startPartIndex?: number;
+  initialProcessedParts?: number;
+  temperature?: number;
+  topP?: number;
+  stream?: boolean;
 };
 
 type PdfHeaderDetectionResult = {
@@ -43,6 +61,38 @@ type PdfHeaderDetectionResult = {
   error?: string;
   model?: string;
   debugInfo?: string;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+  };
+};
+
+type PdfTextItemRaw = { str?: unknown };
+
+type GeminiUsageMetadata = {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+};
+
+type GeminiResponse = {
+  text: () => string;
+  usageMetadata?: GeminiUsageMetadata;
+  modelVersion?: unknown;
+};
+
+type GeminiGenerateContentResult = {
+  response: Promise<GeminiResponse>;
+};
+
+type GeminiStreamChunk = {
+  text: () => string;
+};
+
+type GeminiStreamResult = {
+  stream: AsyncIterable<GeminiStreamChunk>;
+  response: Promise<GeminiResponse>;
 };
 
 // Importar pdfjs-dist de forma lazy
@@ -50,6 +100,14 @@ const getPdfJs = async () => {
   const pdfjsLib = await import('pdfjs-dist');
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
   return pdfjsLib;
+};
+
+const itemsToText = (items: unknown): string => {
+  if (!Array.isArray(items)) return '';
+  return (items as PdfTextItemRaw[])
+    .map(item => (typeof item?.str === 'string' ? item.str : ''))
+    .filter(Boolean)
+    .join(' ');
 };
 
 const extractTextFromPDF = async (pdfFile: File): Promise<string> => {
@@ -65,9 +123,7 @@ const extractTextFromPDF = async (pdfFile: File): Promise<string> => {
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => item.str)
-      .join(' ');
+    const pageText = itemsToText((textContent as { items?: unknown })?.items);
     fullText += `\n--- Página ${i} ---\n${pageText}\n`;
   }
 
@@ -87,9 +143,7 @@ const extractTextChunksFromPDF = async (pdfFile: File, maxPagesPerChunk = 1): Pr
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => item.str)
-      .join(' ');
+    const pageText = itemsToText((textContent as { items?: unknown })?.items);
     const pageBlock = `\n--- Página ${i} ---\n${pageText}\n`;
     current += pageBlock;
     pageCount += 1;
@@ -125,7 +179,10 @@ const extractJsonFromModelText = (text: string) => {
 export const detectPdfHeadersWithGemini = async (
   pdfFile: File,
   apiKey: string,
-  modelName = 'gemini-2.0-flash'
+  modelName = 'gemini-2.0-flash',
+  temperature?: number,
+  topP?: number,
+  stream?: boolean
 ): Promise<PdfHeaderDetectionResult> => {
   try {
     if (!apiKey || apiKey.trim() === '') {
@@ -143,8 +200,8 @@ export const detectPdfHeadersWithGemini = async (
     const model = genAI.getGenerativeModel({
       model: modelName,
       generationConfig: {
-        temperature: 0.1,
-        topP: 0.95,
+        temperature: typeof temperature === 'number' ? temperature : 0.1,
+        topP: typeof topP === 'number' ? topP : 0.95,
         topK: 40,
       },
     });
@@ -173,9 +230,33 @@ REGLAS IMPORTANTES:
 
 RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
 
-    const result = await model.generateContent(prompt);
+    const shouldStream = !!stream;
+    const modelWithStream = model as unknown as {
+      generateContentStream?: (prompt: string) => Promise<GeminiStreamResult>;
+    };
+    const result = shouldStream && typeof modelWithStream.generateContentStream === 'function'
+      ? await modelWithStream.generateContentStream(prompt)
+      : ((await model.generateContent(prompt)) as unknown as GeminiGenerateContentResult);
     const response = await result.response;
-    const text = response.text();
+    let text = '';
+    if (shouldStream && 'stream' in result) {
+      for await (const chunk of (result as GeminiStreamResult).stream) {
+        text += chunk.text();
+      }
+    } else {
+      text = response.text();
+    }
+
+    const geminiMeta = response as unknown as { usageMetadata?: GeminiUsageMetadata; modelVersion?: unknown };
+    const usageMeta = geminiMeta.usageMetadata;
+    const usage = usageMeta
+      ? {
+          promptTokens: usageMeta.promptTokenCount ?? 0,
+          completionTokens: usageMeta.candidatesTokenCount ?? 0,
+          totalTokens: usageMeta.totalTokenCount ?? 0,
+        }
+      : undefined;
+    const modelVersion = geminiMeta.modelVersion;
 
     const jsonText = extractJsonFromModelText(text);
 
@@ -190,8 +271,13 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
       return { success: false, error: 'La IA no identificó correctamente el encabezado de columnas', model: modelName };
     }
 
-    return { success: true, headers: data.headers, model: modelName };
-  } catch (error: any) {
+    return {
+      success: true,
+      headers: data.headers,
+      model: typeof modelVersion === 'string' ? modelVersion : modelName,
+      usage,
+    };
+  } catch (error: unknown) {
     let debugInfo: string | undefined;
     try {
       if (error instanceof Error) {
@@ -204,7 +290,7 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
     }
     return {
       success: false,
-      error: error?.message || 'Error desconocido al detectar encabezados con Gemini',
+      error: error instanceof Error ? error.message : 'Error desconocido al detectar encabezados con Gemini',
       model: modelName,
       debugInfo,
     };
@@ -232,14 +318,15 @@ export const analyzePDFWithGemini = async (
     const model = genAI.getGenerativeModel({
       model: modelName,
       generationConfig: {
-        temperature: 0.1,
-        topP: 0.95,
+        temperature: typeof options?.temperature === 'number' ? options.temperature : 0.1,
+        topP: typeof options?.topP === 'number' ? options.topP : 0.95,
         topK: 40,
       },
     });
 
     const totalParts = chunks.length;
-    let processedParts = 0;
+    let processedParts = typeof options?.initialProcessedParts === 'number' ? options.initialProcessedParts : 0;
+    const startPartIndex = typeof options?.startPartIndex === 'number' ? options.startPartIndex : 0;
 
     let finalHeaders: string[] | undefined;
     const allRows: string[][] = [];
@@ -248,9 +335,30 @@ export const analyzePDFWithGemini = async (
     let totalTotalTokens = 0;
     let finalModel = modelName;
 
-    for (let index = 0; index < chunks.length; index++) {
+    for (let index = startPartIndex; index < chunks.length; index++) {
+      if (options?.signal?.aborted) {
+        return { success: false, error: 'ABORTED', model: modelName };
+      }
+      const segmentId = `parte-${index + 1}`;
       const part = chunks[index];
       if (!part || part.trim().length < 10) {
+        processedParts += 1;
+        options?.onProgress?.({
+          totalParts,
+          processedParts,
+          provider: 'gemini',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'completed',
+          elapsedMs: 0,
+          rowCount: 0,
+          usage: {
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+          },
+        });
         continue;
       }
 
@@ -300,17 +408,58 @@ REGLAS IMPORTANTES:
 
 RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
 
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+      const partStartedAt = Date.now();
+      options?.onProgress?.({
+        totalParts,
+        processedParts,
+        provider: 'gemini',
+        kind: 'analyze_part',
+        segmentId,
+        partIndex: index + 1,
+        status: 'in_progress',
+      });
 
-      const usage = (response as any).usageMetadata;
+      const shouldStream = !!options?.stream;
+      const modelWithStream = model as unknown as {
+        generateContentStream?: (prompt: string) => Promise<GeminiStreamResult>;
+      };
+      const result = shouldStream && typeof modelWithStream.generateContentStream === 'function'
+        ? await modelWithStream.generateContentStream(prompt)
+        : ((await model.generateContent(prompt)) as unknown as GeminiGenerateContentResult);
+      const response = await result.response;
+      let text = '';
+      if (shouldStream && 'stream' in result) {
+        for await (const chunk of (result as GeminiStreamResult).stream) {
+          if (options?.signal?.aborted) {
+            return { success: false, error: 'ABORTED', model: modelName };
+          }
+          text += chunk.text();
+        }
+      } else {
+        text = response.text();
+      }
+      const partEndedAt = Date.now();
+      const partElapsedMs = partEndedAt - partStartedAt;
+
+      if (options?.signal?.aborted) {
+        return { success: false, error: 'ABORTED', model: modelName };
+      }
+
+      const geminiMeta = response as unknown as { usageMetadata?: GeminiUsageMetadata; modelVersion?: unknown };
+      const usage = geminiMeta.usageMetadata;
+      const partUsage = usage
+        ? {
+            promptTokens: usage.promptTokenCount ?? 0,
+            completionTokens: usage.candidatesTokenCount ?? 0,
+            totalTokens: usage.totalTokenCount ?? 0,
+          }
+        : undefined;
       if (usage) {
         totalPromptTokens += usage.promptTokenCount ?? 0;
         totalCompletionTokens += usage.candidatesTokenCount ?? 0;
         totalTotalTokens += usage.totalTokenCount ?? 0;
       }
-      const modelVersion = (response as any).modelVersion;
+      const modelVersion = geminiMeta.modelVersion;
       if (modelVersion && typeof modelVersion === 'string') {
         finalModel = modelVersion;
       }
@@ -321,11 +470,39 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
       try {
         data = JSON.parse(jsonText);
       } catch {
-        return { success: false, error: 'La IA no retornó un JSON válido. Intenta de nuevo.', model: modelName };
+        processedParts += 1;
+        options?.onProgress?.({
+          totalParts,
+          processedParts,
+          provider: 'gemini',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'failed',
+          elapsedMs: partElapsedMs,
+          usage: partUsage,
+          rowCount: 0,
+          error: 'La IA no retornó un JSON válido. Intenta de nuevo.',
+        });
+        continue;
       }
 
       if (!data.headers || !Array.isArray(data.headers) || data.headers.length === 0) {
-        return { success: false, error: 'La IA no identificó correctamente las columnas', model: modelName };
+        processedParts += 1;
+        options?.onProgress?.({
+          totalParts,
+          processedParts,
+          provider: 'gemini',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'failed',
+          elapsedMs: partElapsedMs,
+          usage: partUsage,
+          rowCount: 0,
+          error: 'La IA no identificó correctamente las columnas',
+        });
+        continue;
       }
 
       if (!data.rows || !Array.isArray(data.rows) || data.rows.length === 0) {
@@ -334,6 +511,13 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
           totalParts,
           processedParts,
           provider: 'gemini',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'completed',
+          elapsedMs: partElapsedMs,
+          usage: partUsage,
+          rowCount: 0,
         });
         continue;
       }
@@ -351,6 +535,13 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
         provider: 'gemini',
         headers: finalHeaders,
         rows: data.rows,
+        kind: 'analyze_part',
+        segmentId,
+        partIndex: index + 1,
+        status: 'completed',
+        elapsedMs: partElapsedMs,
+        usage: partUsage,
+        rowCount: data.rows.length,
       });
     }
 
@@ -369,7 +560,7 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
         totalTokens: totalTotalTokens || undefined,
       },
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     let debugInfo: string | undefined;
     try {
       if (error instanceof Error) {
@@ -382,7 +573,7 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
     }
     return {
       success: false,
-      error: error?.message || 'Error desconocido al analizar PDF con Gemini',
+      error: error instanceof Error ? error.message : 'Error desconocido al analizar PDF con Gemini',
       model: modelName,
       debugInfo,
     };
@@ -419,7 +610,7 @@ export const detectPdfHeadersWithKimi = async (
 
     const sampleText = chunks[0];
 
-    const payload: any = {
+    const payload: Record<string, unknown> = {
       model: modelName,
       messages: [
         {
@@ -453,10 +644,17 @@ export const detectPdfHeadersWithKimi = async (
     if (!response.ok) {
       const text = await response.text();
       let message = text;
+      let errorJson: unknown = null;
       try {
-        const json = JSON.parse(text);
-        message = json?.error?.message || text;
-      } catch {
+        errorJson = JSON.parse(text) as unknown;
+      } catch (e) {
+        errorJson = null;
+      }
+      if (errorJson && typeof errorJson === 'object') {
+        const maybeMessage = (errorJson as { error?: { message?: unknown } })?.error?.message;
+        if (typeof maybeMessage === 'string' && maybeMessage.trim()) {
+          message = maybeMessage;
+        }
       }
       const debugInfo = `HTTP ${response.status} ${response.statusText}\n${text}`;
       return {
@@ -490,12 +688,21 @@ export const detectPdfHeadersWithKimi = async (
       return { success: false, error: 'La IA no identificó correctamente el encabezado de columnas', model: modelName };
     }
 
+    const usage = data?.usage
+      ? {
+          promptTokens: data.usage.prompt_tokens ?? data.usage.promptTokens ?? 0,
+          completionTokens: data.usage.completion_tokens ?? data.usage.completionTokens ?? 0,
+          totalTokens: data.usage.total_tokens ?? data.usage.totalTokens ?? 0,
+        }
+      : undefined;
+
     return {
       success: true,
       headers: parsed.headers,
       model: data?.model || modelName,
+      usage,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     let debugInfo: string | undefined;
     try {
       if (error instanceof Error) {
@@ -508,7 +715,7 @@ export const detectPdfHeadersWithKimi = async (
     }
     return {
       success: false,
-      error: error?.message || 'Error desconocido al detectar encabezados con Kimi',
+      error: error instanceof Error ? error.message : 'Error desconocido al detectar encabezados con Kimi',
       model: modelName,
       debugInfo,
     };
@@ -535,7 +742,8 @@ export const analyzePDFWithKimi = async (
     }
 
     const totalParts = chunks.length;
-    let processedParts = 0;
+    let processedParts = typeof options?.initialProcessedParts === 'number' ? options.initialProcessedParts : 0;
+    const startPartIndex = typeof options?.startPartIndex === 'number' ? options.startPartIndex : 0;
 
     let finalHeaders: string[] | undefined;
     const allRows: string[][] = [];
@@ -544,9 +752,30 @@ export const analyzePDFWithKimi = async (
     let totalTotalTokens = 0;
     let finalModel = modelName;
 
-    for (let index = 0; index < chunks.length; index++) {
+    for (let index = startPartIndex; index < chunks.length; index++) {
+      if (options?.signal?.aborted) {
+        return { success: false, error: 'ABORTED', model: modelName };
+      }
+      const segmentId = `parte-${index + 1}`;
       const part = chunks[index];
       if (!part || part.trim().length < 10) {
+        processedParts += 1;
+        options?.onProgress?.({
+          totalParts,
+          processedParts,
+          provider: 'kimi',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'completed',
+          elapsedMs: 0,
+          rowCount: 0,
+          usage: {
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+          },
+        });
         continue;
       }
 
@@ -560,7 +789,59 @@ export const analyzePDFWithKimi = async (
         ? knownHeaders.map(h => `"${h}"`).join(', ')
         : '"Fecha", "Descripción", "Origen", "Crédito", "Débito", "Saldo"';
 
-      const payload: any = {
+      const userPromptLines: string[] = [
+        'Analiza el siguiente texto extraído de un extracto bancario en PDF y conviértelo a formato de tabla estructurada.',
+        '',
+        `Este texto corresponde a la parte ${index + 1} de ${chunks.length} de un extracto completo. Solo debes procesar las transacciones que aparezcan en este fragmento, sin inventar ni repetir movimientos de otras partes.`,
+        '',
+        'REQUISITOS DE ORDEN Y CONTENIDO:',
+        '- Mantén el orden exacto en que aparecen las transacciones en el texto.',
+        '- No reordenes filas por fecha ni por ningún otro criterio.',
+        '- No combines ni separes transacciones: cada línea o movimiento del texto debe corresponder a una fila.',
+        '- No corrijas ni modifiques textos, descripciones ni montos.',
+        '- No agreges palabras, notas ni aclaraciones a las descripciones.',
+        '',
+        `TEXTO DEL PDF (PARTE ${index + 1}/${chunks.length}):`,
+        part,
+        '',
+        'INSTRUCCIONES:',
+        '1. Identifica las columnas del extracto bancario.',
+      ];
+
+      if (knownHeaders && knownHeaders.length > 0) {
+        userPromptLines.push(
+          'Las columnas detectadas previamente son estas y debes usarlas exactamente, en este mismo orden y sin cambiar los nombres:',
+          `[${headersLine}]`,
+          '',
+        );
+      }
+
+      userPromptLines.push(
+        '2. Extrae todas las transacciones/movimientos de ESTE FRAGMENTO manteniendo el mismo orden del texto',
+        '3. Organiza los datos en formato de tabla',
+        '4. Retorna SOLO un JSON con esta estructura exacta:',
+        '{',
+        `  "headers": [${headersLine}],`,
+        '  "rows": [',
+        '    ["01/12/2024", "Depósito", "ORIGEN", "1000.00", "", "1000.00"],',
+        '    ["02/12/2024", "Compra", "ORIGEN", "", "50.00", "950.00"]',
+        '  ]',
+        '}',
+        '',
+        'REGLAS IMPORTANTES:',
+        '- NO incluyas texto adicional, solo el JSON',
+        '- No agregues explicaciones, títulos ni comentarios fuera del JSON',
+        '- Mantén los valores numéricos como strings',
+        '- Si una celda está vacía, usa string vacío ""',
+        '- Incluye SOLO las transacciones que aparezcan explícitamente en este fragmento',
+        '- NO inventes transacciones ni montos',
+        '- No combines ni dividas movimientos: cada transacción del texto corresponde a una fila',
+        '- Asegúrate de que cada fila tenga el mismo número de columnas que headers',
+        '',
+        'RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.',
+      );
+
+      const payload: Record<string, unknown> = {
         model: modelName,
         messages: [
           {
@@ -570,7 +851,7 @@ export const analyzePDFWithKimi = async (
           },
           {
             role: 'user',
-            content: `Analiza el siguiente texto extraído de un extracto bancario en PDF y conviértelo a formato de tabla estructurada.\n\nEste texto corresponde a la parte ${index + 1} de ${chunks.length} de un extracto completo. Solo debes procesar las transacciones que aparezcan en este fragmento, sin inventar ni repetir movimientos de otras partes.\n\nREQUISITOS DE ORDEN Y CONTENIDO:\n- Mantén el orden exacto en que aparecen las transacciones en el texto.\n- No reordenes filas por fecha ni por ningún otro criterio.\n- No combines ni separes transacciones: cada línea o movimiento del texto debe corresponder a una fila.\n- No corrijas ni modifiques textos, descripciones ni montos.\n- No agreges palabras, notas ni aclaraciones a las descripciones.\n\nTEXTO DEL PDF (PARTE ${index + 1}/${chunks.length}):\n${part}\n\nINSTRUCCIONES:\n1. Identifica las columnas del extracto bancario.\n${knownHeaders && knownHeaders.length > 0 ? `Las columnas detectadas previamente son estas y debes usarlas exactamente, en este mismo orden y sin cambiar los nombres:\n[${headersLine}]\n` : ''}2. Extrae todas las transacciones/movimientos de ESTE FRAGMENTO manteniendo el mismo orden del texto\n3. Organiza los datos en formato de tabla\n4. Retorna SOLO un JSON con esta estructura exacta:\n{\n  "headers": [${headersLine}],\n  "rows": [\n    ["01/12/2024", "Depósito", "ORIGEN", "1000.00", "", "1000.00"],\n    ["02/12/2024", "Compra", "ORIGEN", "", "50.00", "950.00"]\n  ]\n}\n\nREGLAS IMPORTANTES:\n- NO incluyas texto adicional, solo el JSON\n- No agregues explicaciones, títulos ni comentarios fuera del JSON\n- Mantén los valores numéricos como strings\n- Si una celda está vacía, usa string vacío \"\"\n- Incluye SOLO las transacciones que aparezcan explícitamente en este fragmento\n- NO inventes transacciones ni montos\n- No combines ni dividas movimientos: cada transacción del texto corresponde a una fila\n- Asegúrate de que cada fila tenga el mismo número de columnas que headers\n\nRESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`,
+            content: userPromptLines.join('\n'),
           },
         ],
       };
@@ -582,6 +863,17 @@ export const analyzePDFWithKimi = async (
         payload.top_p = topP;
       }
 
+      const partStartedAt = Date.now();
+      options?.onProgress?.({
+        totalParts,
+        processedParts,
+        provider: 'kimi',
+        kind: 'analyze_part',
+        segmentId,
+        partIndex: index + 1,
+        status: 'in_progress',
+      });
+
       const response = await fetch('https://api.moonshot.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -589,7 +881,14 @@ export const analyzePDFWithKimi = async (
           Authorization: `Bearer ${apiKey.trim()}`,
         },
         body: JSON.stringify(payload),
+        signal: options?.signal,
       });
+      const partEndedAt = Date.now();
+      const partElapsedMs = partEndedAt - partStartedAt;
+
+      if (options?.signal?.aborted) {
+        return { success: false, error: 'ABORTED', model: modelName };
+      }
 
       if (!response.ok) {
         const text = await response.text();
@@ -598,14 +897,23 @@ export const analyzePDFWithKimi = async (
           const json = JSON.parse(text);
           message = json?.error?.message || text;
         } catch {
+          message = text;
         }
         const debugInfo = `HTTP ${response.status} ${response.statusText}\n${text}`;
-        return {
-          success: false,
+        processedParts += 1;
+        options?.onProgress?.({
+          totalParts,
+          processedParts,
+          provider: 'kimi',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'failed',
+          elapsedMs: partElapsedMs,
+          rowCount: 0,
           error: `Error de Kimi (${response.status}): ${message}`,
-          model: modelName,
-          debugInfo,
-        };
+        });
+        continue;
       }
 
       const data = await response.json();
@@ -615,7 +923,20 @@ export const analyzePDFWithKimi = async (
         '';
 
       if (!content || typeof content !== 'string') {
-        return { success: false, error: 'La IA no retornó contenido de texto', model: modelName };
+        processedParts += 1;
+        options?.onProgress?.({
+          totalParts,
+          processedParts,
+          provider: 'kimi',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'failed',
+          elapsedMs: partElapsedMs,
+          rowCount: 0,
+          error: 'La IA no retornó contenido de texto',
+        });
+        continue;
       }
 
       const jsonText = extractJsonFromModelText(content);
@@ -624,11 +945,37 @@ export const analyzePDFWithKimi = async (
       try {
         parsed = JSON.parse(jsonText);
       } catch {
-        return { success: false, error: 'La IA no retornó un JSON válido. Intenta de nuevo.', model: modelName };
+        processedParts += 1;
+        options?.onProgress?.({
+          totalParts,
+          processedParts,
+          provider: 'kimi',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'failed',
+          elapsedMs: partElapsedMs,
+          rowCount: 0,
+          error: 'La IA no retornó un JSON válido. Intenta de nuevo.',
+        });
+        continue;
       }
 
       if (!parsed.headers || !Array.isArray(parsed.headers) || parsed.headers.length === 0) {
-        return { success: false, error: 'La IA no identificó correctamente las columnas', model: modelName };
+        processedParts += 1;
+        options?.onProgress?.({
+          totalParts,
+          processedParts,
+          provider: 'kimi',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'failed',
+          elapsedMs: partElapsedMs,
+          rowCount: 0,
+          error: 'La IA no identificó correctamente las columnas',
+        });
+        continue;
       }
       if (!parsed.rows || !Array.isArray(parsed.rows) || parsed.rows.length === 0) {
         processedParts += 1;
@@ -636,6 +983,12 @@ export const analyzePDFWithKimi = async (
           totalParts,
           processedParts,
           provider: 'kimi',
+          kind: 'analyze_part',
+          segmentId,
+          partIndex: index + 1,
+          status: 'completed',
+          elapsedMs: partElapsedMs,
+          rowCount: 0,
         });
         continue;
       }
@@ -647,6 +1000,13 @@ export const analyzePDFWithKimi = async (
       allRows.push(...parsed.rows);
 
       const usage = data?.usage;
+      const partUsage = usage
+        ? {
+            promptTokens: usage.prompt_tokens ?? usage.promptTokens ?? 0,
+            completionTokens: usage.completion_tokens ?? usage.completionTokens ?? 0,
+            totalTokens: usage.total_tokens ?? usage.totalTokens ?? 0,
+          }
+        : undefined;
       if (usage) {
         totalPromptTokens += usage.prompt_tokens ?? usage.promptTokens ?? 0;
         totalCompletionTokens += usage.completion_tokens ?? usage.completionTokens ?? 0;
@@ -663,6 +1023,13 @@ export const analyzePDFWithKimi = async (
         provider: 'kimi',
         headers: finalHeaders,
         rows: parsed.rows,
+        kind: 'analyze_part',
+        segmentId,
+        partIndex: index + 1,
+        status: 'completed',
+        elapsedMs: partElapsedMs,
+        usage: partUsage,
+        rowCount: parsed.rows.length,
       });
     }
 
@@ -681,7 +1048,13 @@ export const analyzePDFWithKimi = async (
         totalTokens: totalTotalTokens || undefined,
       },
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return { success: false, error: 'ABORTED', model: modelName };
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      return { success: false, error: 'ABORTED', model: modelName };
+    }
     let debugInfo: string | undefined;
     try {
       if (error instanceof Error) {
@@ -692,9 +1065,11 @@ export const analyzePDFWithKimi = async (
     } catch {
       debugInfo = String(error);
     }
+    const errorMessage =
+      error instanceof Error ? error.message : 'Error desconocido al analizar PDF con Kimi';
     return {
       success: false,
-      error: error?.message || 'Error desconocido al analizar PDF con Kimi',
+      error: errorMessage,
       model: modelName,
       debugInfo,
     };
@@ -844,11 +1219,14 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
       method: 'ai'
     };
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error al convertir PDF con IA:', error);
     return {
       success: false,
-      error: error.message || 'Error desconocido al convertir PDF con IA',
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Error desconocido al convertir PDF con IA',
       method: 'ai'
     };
   }

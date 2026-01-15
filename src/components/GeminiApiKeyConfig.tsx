@@ -59,9 +59,10 @@ const GeminiApiKeyConfig: React.FC = () => {
       } else {
         showError('La API Key no retornó una respuesta válida');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error al probar API Key:', error);
-      showError(`Error: ${error.message || 'API Key inválida'}`);
+      const message = error instanceof Error ? error.message : 'API Key inválida';
+      showError(`Error: ${message}`);
     }
   };
 

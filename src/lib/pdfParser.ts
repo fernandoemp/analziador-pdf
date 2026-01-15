@@ -83,9 +83,9 @@ const parseDate = (dateStr: string): string => {
 
   // Intentar varios formatos
   const formats = [
-    /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/, // DD/MM/YYYY o DD-MM-YYYY
-    /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/, // YYYY/MM/DD o YYYY-MM-DD
-    /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})$/,  // DD/MM/YY o DD-MM-YY
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/, // DD/MM/YYYY o DD-MM-YYYY
+    /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/, // YYYY/MM/DD o YYYY-MM-DD
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{2})$/,  // DD/MM/YY o DD-MM-YY
   ];
 
   for (const format of formats) {
@@ -173,8 +173,12 @@ export const parsePDFFile = async (
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item: any) => item.str)
+      const pageText = (textContent.items as unknown[])
+        .map((item) => {
+          if (typeof item !== 'object' || item === null) return '';
+          const maybeStr = (item as { str?: unknown }).str;
+          return typeof maybeStr === 'string' ? maybeStr : '';
+        })
         .join(' ');
       fullText += pageText + '\n';
     }
@@ -283,8 +287,9 @@ export const parsePDFFile = async (
     console.log(`PDF procesado: ${transactions.length} transacciones encontradas`);
     return transactions;
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error al procesar PDF:', error);
-    throw new Error(`Error al procesar PDF: ${error.message}`);
+    const message = error instanceof Error ? error.message : 'Error desconocido';
+    throw new Error(`Error al procesar PDF: ${message}`);
   }
 };

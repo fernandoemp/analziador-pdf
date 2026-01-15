@@ -11,7 +11,7 @@ export const parseFile = async (
   bank: Bank
 ): Promise<Transaction[]> => {
   const fileName = file.name.toLowerCase();
-  const fileExtension = fileName.split('.').pop() as FileFormatType;
+  const fileExtension = fileName.split('.').pop() || '';
 
   console.log('Procesando archivo:', fileName, 'Extensión:', fileExtension, 'Tipo MIME:', file.type, 'Banco:', bankName);
 

@@ -82,7 +82,7 @@ const preprocessImage = (file: File): Promise<Blob> => {
 };
 
 const parseMoney = (s: string): number | undefined => {
-  const cleaned = s.replace(/[\s\$€₡]/g, '').replace(/\./g, '').replace(/,/g, '.');
+  const cleaned = s.replace(/[\s$€₡]/g, '').replace(/\./g, '').replace(/,/g, '.');
   const num = parseFloat(cleaned);
   return isNaN(num) ? undefined : num;
 };
@@ -99,7 +99,7 @@ const extractField = (text: string, patterns: RegExp[]): string | undefined => {
 const parseItems = (lines: string[]): InvoiceItem[] => {
   const items: InvoiceItem[] = [];
   for (const line of lines) {
-    const m = line.match(/(.+?)\s+(\d+(?:[\.,]\d+)?)\s+(\d+(?:[\.,]\d+)?)\s+(\d+(?:[\.,]\d+)?)/);
+    const m = line.match(/(.+?)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)\s+(\d+(?:[.,]\d+)?)/);
     if (m) {
       const description = m[1].trim();
       const quantity = parseMoney(m[2]);
@@ -135,19 +135,19 @@ export const extractInvoiceDataFromImage = async (file: File): Promise<InvoiceDa
   ]);
 
   const issueDate = extractField(text, [
-    /(fecha[:\s]*)(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
-    /(date[:\s]*)(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i,
-    /(\d{4}[\/-]\d{1,2}[\/-]\d{1,2})/i,
+    /(fecha[:\s]*)(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i,
+    /(date[:\s]*)(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i,
+    /(\d{4}[/-]\d{1,2}[/-]\d{1,2})/i,
   ]);
 
   const subtotalStr = extractField(text, [
-    /(subtotal[:\s]*)([$€₡]?\s*[\d\.,]+)/i,
+    /(subtotal[:\s]*)([$€₡]?\s*[\d.,]+)/i,
   ]);
   const taxStr = extractField(text, [
-    /(iva|impuesto|tax)[:\s]*([$€₡]?\s*[\d\.,]+)/i,
+    /(iva|impuesto|tax)[:\s]*([$€₡]?\s*[\d.,]+)/i,
   ]);
   const totalStr = extractField(text, [
-    /(total[:\s]*)([$€₡]?\s*[\d\.,]+)/i,
+    /(total[:\s]*)([$€₡]?\s*[\d.,]+)/i,
   ]);
 
   const currency = lower.includes('crc') || /₡/.test(text) ? 'CRC'
@@ -174,9 +174,9 @@ export const extractInvoiceDataFromImage = async (file: File): Promise<InvoiceDa
   ]);
 
   const items = parseItems(lines);
-  const fallbackSubtotal = extractField(text, [/(sub\s*total|subtotal)[:\s]*([$€₡S\.\/]?\s*[\d\.,]+)/i]);
-  const fallbackTax = extractField(text, [/(iva|igv|impuesto)[:\s]*([$€₡S\.\/]?\s*[\d\.,]+)/i]);
-  const fallbackTotal = extractField(text, [/(total(?:\s*a\s*pagar)?|total\s*factura)[:\s]*([$€₡S\.\/]?\s*[\d\.,]+)/i]);
+  const fallbackSubtotal = extractField(text, [/(sub\s*total|subtotal)[:\s]*([$€₡S./]?\s*[\d.,]+)/i]);
+  const fallbackTax = extractField(text, [/(iva|igv|impuesto)[:\s]*([$€₡S./]?\s*[\d.,]+)/i]);
+  const fallbackTotal = extractField(text, [/(total(?:\s*a\s*pagar)?|total\s*factura)[:\s]*([$€₡S./]?\s*[\d.,]+)/i]);
 
   const data: InvoiceData = {
     issuerName,

@@ -2,10 +2,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { Transaction, FileRecord, FileSourceType } from '@/types/finanzas';
 
 const categories = ['Ventas', 'Alquiler', 'Impuestos', 'Salario', 'Comida', 'Transporte', 'Entretenimiento', 'Servicios', 'Inversiones'];
-const sources = {
+const sources: Record<FileSourceType, string[]> = {
   banco: ['Banco Pata', 'Banco Gato'],
   exterior: ['Payo', 'Wise'],
   inversion: ['Broker X', 'Fondo Y'],
+  imagen: ['Factura'],
 };
 
 const getRandomItem = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
