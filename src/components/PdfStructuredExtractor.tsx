@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Trash2, Pencil, AlertTriangle, Square, Play, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, Pencil, AlertTriangle, Square, Play, RotateCcw, Settings } from 'lucide-react';
 import {
   settingsDb,
   type AiModelConfig,
@@ -22,6 +22,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,9 +37,621 @@ import { Progress } from '@/components/ui/progress';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AiLogsDialog } from '@/components/pdf-structured-extractor/AiLogsDialog';
 import { ComparePdfAiDialog } from '@/components/pdf-structured-extractor/ComparePdfAiDialog';
+import { AiAnalysisResumeBanner } from '@/components/pdf-structured-extractor/AiAnalysisResumeBanner';
 import { PdfLocalControls } from '@/components/pdf-structured-extractor/PdfLocalControls';
+import { useAiAnalysisPersistence } from '@/hooks/useAiAnalysisPersistence';
 import { useLocalPdfAnalysis } from '@/hooks/useLocalPdfAnalysis';
 import { computeInvalidAmountRows, computeSimpleDiff, normalizeHeaderText } from '@/lib/pdfStructuredExtractorUtils';
+import { showSuccess } from '@/utils/toast';
+
+const ADVANCED_AI_SETTINGS_STORAGE_KEY = 'pdf-structured-extractor:advanced-ai-settings:v1';
+
+type AdvancedAiSettings = {
+  temperature: number;
+  topP: number;
+  stream: boolean;
+};
+
+const AiVerificationHeaderBar = ({ onOpenAdvancedSettings }: { onOpenAdvancedSettings: () => void }) => {
+  return (
+    <div className="flex items-center justify-between">
+      <div className="font-semibold">Verificación con IA</div>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        onClick={onOpenAdvancedSettings}
+        aria-label="Configuración avanzada"
+      >
+        <Settings className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+};
+
+const AdvancedAiSettingsDialog = ({
+  open,
+  onOpenChange,
+  settings,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  settings: AdvancedAiSettings;
+  onSave: (next: AdvancedAiSettings) => void;
+}) => {
+  const [draftTemperature, setDraftTemperature] = useState<string>(String(settings.temperature));
+  const [draftTopP, setDraftTopP] = useState<string>(String(settings.topP));
+  const [draftStream, setDraftStream] = useState<boolean>(settings.stream);
+  const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    if (!open) return;
+    setDraftTemperature(String(settings.temperature));
+    setDraftTopP(String(settings.topP));
+    setDraftStream(settings.stream);
+    setError('');
+  }, [open, settings.temperature, settings.topP, settings.stream]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg w-[calc(100%-2rem)]">
+        <DialogHeader>
+          <DialogTitle>Configuración avanzada</DialogTitle>
+          <DialogDescription>Ajusta parámetros del modelo y guarda tus preferencias.</DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-1 gap-4">
+          <div>
+            <Label>Temperature</Label>
+            <div className="mt-2">
+              <Slider
+                value={[
+                  Number.isFinite(Number(draftTemperature))
+                    ? Math.max(0, Math.min(1, Number(draftTemperature)))
+                    : settings.temperature,
+                ]}
+                onValueChange={(vals) => setDraftTemperature(String(vals[0] ?? 0))}
+                min={0}
+                max={1}
+                step={0.05}
+              />
+            </div>
+            <Input
+              className="mt-2"
+              type="number"
+              step="0.05"
+              min={0}
+              max={1}
+              value={draftTemperature}
+              onChange={(e) => setDraftTemperature(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label>Top P</Label>
+            <div className="mt-2">
+              <Slider
+                value={[
+                  Number.isFinite(Number(draftTopP))
+                    ? Math.max(0, Math.min(1, Number(draftTopP)))
+                    : settings.topP,
+                ]}
+                onValueChange={(vals) => setDraftTopP(String(vals[0] ?? 1))}
+                min={0}
+                max={1}
+                step={0.05}
+              />
+            </div>
+            <Input
+              className="mt-2"
+              type="number"
+              step="0.05"
+              min={0}
+              max={1}
+              value={draftTopP}
+              onChange={(e) => setDraftTopP(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+            <div className="space-y-1">
+              <div className="text-sm font-medium">Stream</div>
+              <div className="text-xs text-muted-foreground">{draftStream ? 'On' : 'Off'}</div>
+            </div>
+            <Switch checked={draftStream} onCheckedChange={setDraftStream} />
+          </div>
+        </div>
+        {error && <div className="text-sm text-destructive">{error}</div>}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setError('');
+              onOpenChange(false);
+            }}
+          >
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => {
+              const nextTemperature = Number(draftTemperature);
+              if (!Number.isFinite(nextTemperature) || nextTemperature < 0 || nextTemperature > 1) {
+                setError('Temperature debe estar entre 0 y 1.');
+                return;
+              }
+              const nextTopP = Number(draftTopP);
+              if (!Number.isFinite(nextTopP) || nextTopP < 0 || nextTopP > 1) {
+                setError('Top P debe estar entre 0 y 1.');
+                return;
+              }
+              onSave({ temperature: nextTemperature, topP: nextTopP, stream: draftStream });
+              setError('');
+              onOpenChange(false);
+            }}
+          >
+            Guardar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const AiHeaderCandidateEditor = ({
+  headerCandidate,
+  headerDraft,
+  isAnalyzing,
+  selectedFile,
+  onUpdateHeaderField,
+  onDeleteHeaderField,
+  onAddHeaderField,
+  onConfirm,
+}: {
+  headerCandidate: string[];
+  headerDraft: string[] | null;
+  isAnalyzing: boolean;
+  selectedFile: File | null;
+  onUpdateHeaderField: (index: number, value: string) => void;
+  onDeleteHeaderField: (index: number) => void;
+  onAddHeaderField: () => void;
+  onConfirm: () => Promise<void>;
+}) => {
+  return (
+    <div className="space-y-2">
+      <div className="text-xs text-muted-foreground">Encabezado detectado por IA. Revísalo y confirma para continuar.</div>
+      <div className="border rounded-md overflow-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              {(headerDraft || headerCandidate || []).map((h, i) => (
+                <TableHead key={`header-candidate-${i}`} className="align-middle">
+                  {headerDraft ? (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="h-8 text-xs"
+                        value={headerDraft[i] ?? ''}
+                        onChange={e => onUpdateHeaderField(i, e.target.value)}
+                      />
+                      {headerDraft.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteHeaderField(i)}
+                          className="text-muted-foreground hover:text-destructive transition"
+                          title="Eliminar campo"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    h || '-'
+                  )}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+        </Table>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" type="button" onClick={onAddHeaderField}>
+          <Plus className="h-3 w-3 mr-1" />
+          Agregar campo
+        </Button>
+        <Button size="sm" variant="secondary" onClick={onConfirm} disabled={isAnalyzing || !selectedFile}>
+          Confirmar encabezado y analizar movimientos
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+const AiProgressControls = ({
+  hasTotalParts,
+  displayProcessedParts,
+  displayTotalParts,
+  isAnalyzing,
+  aiAnalysisState,
+  canRestart,
+  canViewDetail,
+  onStop,
+  onResume,
+  onRestart,
+  onCancel,
+  onViewDetail,
+}: {
+  hasTotalParts: boolean;
+  displayProcessedParts: number;
+  displayTotalParts: number;
+  isAnalyzing: boolean;
+  aiAnalysisState: 'idle' | 'running' | 'stopped' | 'failed' | 'completed';
+  canRestart: boolean;
+  canViewDetail: boolean;
+  onStop: () => void;
+  onResume: () => void;
+  onRestart: () => void;
+  onCancel: () => void;
+  onViewDetail: () => void;
+}) => {
+  const percent = hasTotalParts ? Math.round((displayProcessedParts / displayTotalParts) * 100) : null;
+  const canShowResume = aiAnalysisState === 'stopped' || aiAnalysisState === 'failed';
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex justify-between text-xs text-muted-foreground flex-1">
+          <span>
+            Progreso del análisis:{' '}
+            {hasTotalParts ? `${displayProcessedParts}/${displayTotalParts} partes` : `${displayProcessedParts} partes`}
+          </span>
+          {typeof percent === 'number' && <span>{percent}%</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="destructive" onClick={onStop} disabled={!isAnalyzing}>
+            <Square className="h-4 w-4 mr-1" />
+            Parar
+          </Button>
+          {canShowResume && (
+            <Button size="sm" variant="secondary" onClick={onResume} disabled={isAnalyzing}>
+              <Play className="h-4 w-4 mr-1" />
+              Continuar
+            </Button>
+          )}
+          <Button size="sm" variant="outline" onClick={onRestart} disabled={!canRestart}>
+            <RotateCcw className="h-4 w-4 mr-1" />
+            Reiniciar
+          </Button>
+          <Button size="sm" variant="destructive" onClick={onCancel} disabled={aiAnalysisState === 'completed'}>
+            <Trash2 className="h-4 w-4 mr-1" />
+            Cancelar
+          </Button>
+          <Button size="sm" variant="outline" onClick={onViewDetail} disabled={!canViewDetail}>
+            Ver detalle
+          </Button>
+        </div>
+      </div>
+      {hasTotalParts && <Progress value={(displayProcessedParts / displayTotalParts) * 100} />}
+    </div>
+  );
+};
+
+const AiResultsTable = ({
+  aiHeaders,
+  aiRows,
+  hasActiveFilters,
+  isFilterPending,
+  visibleRowIndices,
+  descriptionFilter,
+  onChangeDescriptionFilter,
+  onClearFilters,
+  dateColIndex,
+  dateOptions,
+  selectedDatesSet,
+  normalizedQuery,
+  onToggleDateSelection,
+  missingSelectedDatesCount,
+  invalidRows,
+  safeCurrentPage,
+  totalPages,
+  onPrevPage,
+  onNextPage,
+  onDownloadCsv,
+  onRequestDeleteColumn,
+  onAddRowAfter,
+  onDeleteRow,
+  editingCell,
+  onChangeEditingValue,
+  onSaveEditCell,
+  onCancelEditCell,
+  onStartEditCell,
+}: {
+  aiHeaders: string[];
+  aiRows: string[][];
+  hasActiveFilters: boolean;
+  isFilterPending: boolean;
+  visibleRowIndices: number[];
+  descriptionFilter: string;
+  onChangeDescriptionFilter: (value: string) => void;
+  onClearFilters: () => void;
+  dateColIndex: number | null;
+  dateOptions: Array<{ value: string; total: number; matches: number }>;
+  selectedDatesSet: Set<string>;
+  normalizedQuery: string;
+  onToggleDateSelection: (value: string) => void;
+  missingSelectedDatesCount: number;
+  invalidRows: number[];
+  safeCurrentPage: number;
+  totalPages: number;
+  onPrevPage: () => void;
+  onNextPage: () => void;
+  onDownloadCsv: () => void;
+  onRequestDeleteColumn: (colIndex: number) => void;
+  onAddRowAfter: (rowIndex: number) => void;
+  onDeleteRow: (rowIndex: number) => void;
+  editingCell: { rowIndex: number; colIndex: number; value: string } | null;
+  onChangeEditingValue: (value: string) => void;
+  onSaveEditCell: () => void;
+  onCancelEditCell: () => void;
+  onStartEditCell: (rowIndex: number, colIndex: number) => void;
+}) => {
+  if (aiHeaders.length === 0) return null;
+  return (
+    <div className="border rounded-md p-3 overflow-auto max-h-[75vh]">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="text-sm text-muted-foreground">Tabla detectada por IA</div>
+          {hasActiveFilters && (
+            <Badge variant="secondary" className="text-xs">
+              Filtros activos
+            </Badge>
+          )}
+          {isFilterPending && (
+            <Badge variant="outline" className="text-xs">
+              Filtrando...
+            </Badge>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onDownloadCsv} disabled={aiHeaders.length === 0 || aiRows.length === 0}>
+            Exportar CSV IA
+          </Button>
+        </div>
+      </div>
+      <div className="mb-3 grid gap-3 md:grid-cols-3">
+        <div className="md:col-span-2 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="ai-desc-filter">Filtro por descripción</Label>
+            <div className="text-xs text-muted-foreground">Mostrando {visibleRowIndices.length} de {aiRows.length}</div>
+          </div>
+          <Input
+            id="ai-desc-filter"
+            value={descriptionFilter}
+            onChange={e => onChangeDescriptionFilter(e.target.value)}
+            placeholder="Buscar (coincidencias parciales)…"
+            aria-label="Buscar por descripción"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs text-muted-foreground">
+              {dateColIndex === null ? 'No se detectó columna de descripción; se busca en toda la fila.' : ''}
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={onClearFilters} disabled={!hasActiveFilters}>
+              Limpiar filtros
+            </Button>
+          </div>
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <Label>Filtro por fecha</Label>
+            {dateColIndex === null && <span className="text-xs text-muted-foreground">Sin columna fecha</span>}
+          </div>
+          <div className="border rounded-md p-2 max-h-44 overflow-auto">
+            {dateColIndex === null ? (
+              <div className="text-xs text-muted-foreground">No se pudo detectar la columna de fecha.</div>
+            ) : dateOptions.length === 0 ? (
+              <div className="text-xs text-muted-foreground">Aún no hay fechas detectadas.</div>
+            ) : (
+              <div className="space-y-1">
+                {dateOptions.map((opt, idx) => {
+                  const id = `ai-date-${idx}`;
+                  const checked = selectedDatesSet.has(opt.value);
+                  const countLabel = normalizedQuery.length > 0 ? `${opt.matches}/${opt.total}` : String(opt.total);
+                  return (
+                    <div key={opt.value} className="flex items-center gap-2">
+                      <Checkbox id={id} checked={checked} onCheckedChange={() => onToggleDateSelection(opt.value)} />
+                      <label htmlFor={id} className="text-xs select-none cursor-pointer flex-1 truncate">
+                        {opt.value}
+                      </label>
+                      <Badge variant="outline" className="text-[10px]">
+                        {countLabel}
+                      </Badge>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {missingSelectedDatesCount > 0 && (
+            <div className="text-[10px] text-amber-600">
+              {missingSelectedDatesCount} fecha(s) seleccionada(s) no están en los datos actuales.
+            </div>
+          )}
+        </div>
+      </div>
+      {invalidRows.length > 0 && (
+        <div className="mb-2 text-xs text-red-600">
+          Hay {invalidRows.length} filas con montos inválidos (crédito/débito vacíos o ambos con valor).
+        </div>
+      )}
+      {!hasActiveFilters && aiRows.length > 0 && (
+        <div className="mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground">
+          <span>
+            Página {safeCurrentPage} de {totalPages}
+          </span>
+          <Button variant="outline" size="xs" disabled={safeCurrentPage <= 1} onClick={onPrevPage}>
+            Anterior
+          </Button>
+          <Button variant="outline" size="xs" disabled={safeCurrentPage >= totalPages} onClick={onNextPage}>
+            Siguiente
+          </Button>
+        </div>
+      )}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-8" />
+            {aiHeaders.map((h, i) => (
+              <TableHead key={`aih-${i}`} className="relative">
+                <span>{h || '-'}</span>
+                <button
+                  type="button"
+                  onClick={() => onRequestDeleteColumn(i)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition"
+                  title="Eliminar columna"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {aiRows.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={aiHeaders.length + 1} className="text-center text-muted-foreground">
+                Sin filas
+              </TableCell>
+            </TableRow>
+          ) : hasActiveFilters && visibleRowIndices.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={aiHeaders.length + 1} className="text-center text-muted-foreground">
+                Sin coincidencias
+              </TableCell>
+            </TableRow>
+          ) : (
+            visibleRowIndices.map(rowIndex => {
+              const r = aiRows[rowIndex] || [];
+              const isInvalid = invalidRows.includes(rowIndex);
+              return (
+                <TableRow key={`air-${rowIndex}`} className="group">
+                  <TableCell className="p-1 align-middle">
+                    <div className="flex flex-col items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => onAddRowAfter(rowIndex)}
+                        className="flex h-6 w-6 items-center justify-center rounded-full border border-dashed text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-muted transition"
+                        title="Agregar fila debajo"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteRow(rowIndex)}
+                        className="flex h-6 w-6 items-center justify-center rounded-full border border-dashed text-destructive opacity-0 group-hover:opacity-100 hover:bg-muted transition"
+                        title="Eliminar fila"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </TableCell>
+                  {r.map((c, j) => {
+                    const isEditing =
+                      editingCell && editingCell.rowIndex === rowIndex && editingCell.colIndex === j;
+                    return (
+                      <TableCell key={`aic-${rowIndex}-${j}`} className={`relative group/cell ${isInvalid ? 'bg-red-50' : ''}`}>
+                        {isEditing ? (
+                          <div className="flex items-center gap-2">
+                            <Input
+                              autoFocus
+                              value={editingCell.value}
+                              onChange={e => onChangeEditingValue(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  onSaveEditCell();
+                                }
+                                if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  onCancelEditCell();
+                                }
+                              }}
+                            />
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-green-600"
+                              type="button"
+                              onClick={onSaveEditCell}
+                            >
+                              ✓
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-destructive"
+                              type="button"
+                              onClick={onCancelEditCell}
+                            >
+                              ✕
+                            </Button>
+                          </div>
+                        ) : (
+                          <>
+                            <span>{c || '-'}</span>
+                            <button
+                              type="button"
+                              onClick={() => onStartEditCell(rowIndex, j)}
+                              className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 text-muted-foreground hover:text-foreground transition"
+                              title="Editar celda"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            {isInvalid && (
+                              <AlertTriangle className="absolute left-1 top-1/2 -translate-y-1/2 h-3 w-3 text-amber-500" />
+                            )}
+                          </>
+                        )}
+                      </TableCell>
+                    );
+                  })}
+                </TableRow>
+              );
+            })
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  );
+};
+
+const DeleteColumnDialog = ({
+  open,
+  onOpenChange,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) => {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Eliminar columna</AlertDialogTitle>
+          <AlertDialogDescription>
+            Esta acción eliminará la columna seleccionada y todos sus valores de la tabla de IA.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={onCancel}>Cancelar</AlertDialogCancel>
+          <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={onConfirm}>
+            Eliminar
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+};
 
 const PdfStructuredExtractor: React.FC = () => {
   const [headers, setHeaders] = useState<string[]>([]);
@@ -63,6 +676,7 @@ const PdfStructuredExtractor: React.FC = () => {
   const [temperature, setTemperature] = useState<number>(0.1);
   const [topP, setTopP] = useState<number | undefined>(undefined);
   const [stream, setStream] = useState<boolean>(false);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
   const [showHistoryIa, setShowHistoryIa] = useState<boolean>(false);
   const [focusAiLogId, setFocusAiLogId] = useState<string | null>(null);
   const [currentAiLogId, setCurrentAiLogId] = useState<string | null>(null);
@@ -92,6 +706,11 @@ const PdfStructuredExtractor: React.FC = () => {
   const aiHeadersRef = useRef<string[]>([]);
   const aiNextPartIndexRef = useRef<number>(0);
   const currentAiLogIdRef = useRef<string | null>(null);
+  const autoResumeAfterFileSelectRef = useRef<boolean>(false);
+  const lastHydratedSessionIdRef = useRef<string | null>(null);
+
+  const aiPersistence = useAiAnalysisPersistence();
+  const hydratedAiSession = aiPersistence.hydrated;
 
   useEffect(() => {
     const initialModels = settingsDb.getAiModels();
@@ -108,6 +727,85 @@ const PdfStructuredExtractor: React.FC = () => {
     setAiLogs(initialLogs);
   }, []);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(ADVANCED_AI_SETTINGS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object') return;
+      const p = parsed as { temperature?: unknown; topP?: unknown; stream?: unknown };
+
+      if (typeof p.temperature === 'number' && Number.isFinite(p.temperature)) {
+        const v = Math.max(0, Math.min(1, p.temperature));
+        setTemperature(v);
+      }
+      if (typeof p.topP === 'number' && Number.isFinite(p.topP)) {
+        const v = Math.max(0, Math.min(1, p.topP));
+        setTopP(v);
+      }
+      if (typeof p.stream === 'boolean') {
+        setStream(p.stream);
+      }
+    } catch {
+      return;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hydratedAiSession) {
+      lastHydratedSessionIdRef.current = null;
+      return;
+    }
+    const sessionId = hydratedAiSession.meta.sessionId;
+    if (lastHydratedSessionIdRef.current === sessionId) return;
+    lastHydratedSessionIdRef.current = sessionId;
+
+    setFileName(hydratedAiSession.meta.file.name);
+    setSelectedProvider(hydratedAiSession.meta.provider);
+    setCustomModel(hydratedAiSession.meta.model);
+
+    const restoredRows = hydratedAiSession.parts.flatMap(p => p.rows);
+    const restoredHeaders =
+      hydratedAiSession.parts.length > 0
+        ? hydratedAiSession.parts[hydratedAiSession.parts.length - 1].headers
+        : hydratedAiSession.meta.confirmedHeaders;
+
+    setAiHeaders(restoredHeaders);
+    setAiRows(restoredRows);
+    setAiPageRowCounts(hydratedAiSession.parts.map(p => p.rows.length));
+    aiHeadersRef.current = restoredHeaders;
+    aiRowsRef.current = restoredRows;
+
+    setTotalParts(hydratedAiSession.meta.totalParts);
+    setProcessedParts(hydratedAiSession.meta.processedParts);
+    aiNextPartIndexRef.current = hydratedAiSession.meta.nextPartIndex ?? hydratedAiSession.meta.processedParts;
+
+    const nextState =
+      hydratedAiSession.meta.status === 'running'
+        ? 'stopped'
+        : hydratedAiSession.meta.status;
+    setAiAnalysisState(nextState);
+
+    const nextConfirmed =
+      hydratedAiSession.meta.confirmedHeaders && hydratedAiSession.meta.confirmedHeaders.length > 0
+        ? hydratedAiSession.meta.confirmedHeaders
+        : null;
+    setConfirmedHeaders(nextConfirmed);
+
+    const logId = hydratedAiSession.meta.currentAiLogId ?? null;
+    currentAiLogIdRef.current = logId;
+    setCurrentAiLogId(logId);
+
+    if (hydratedAiSession.meta.localResult) {
+      setHeaders(hydratedAiSession.meta.localResult.headers);
+      setRows(hydratedAiSession.meta.localResult.rows);
+      setProcessed(
+        hydratedAiSession.meta.localResult.headers.length > 0 &&
+          hydratedAiSession.meta.localResult.rows.length > 0,
+      );
+    }
+  }, [hydratedAiSession]);
+
   const {
     analysisRuns,
     localAnalysisState,
@@ -123,6 +821,9 @@ const PdfStructuredExtractor: React.FC = () => {
       setHeaders(nextHeaders);
       setRows(nextRows);
       setProcessed(nextHeaders.length > 0 && nextRows.length > 0);
+      aiPersistence.updateMeta({
+        localResult: { headers: nextHeaders, rows: nextRows },
+      });
     },
     onError: (message) => {
       setVerifyError(message);
@@ -159,14 +860,24 @@ const PdfStructuredExtractor: React.FC = () => {
   }, [pdfUrl]);
 
   const handleFile = async (file: File) => {
+    const shouldResumeStored = !!hydratedAiSession && aiPersistence.matchesActiveFile(file);
+    if (!shouldResumeStored) {
+      aiPersistence.clearActive();
+      autoResumeAfterFileSelectRef.current = false;
+    } else {
+      autoResumeAfterFileSelectRef.current = hydratedAiSession.meta.status === 'running';
+    }
+
     aiAbortControllerRef.current?.abort();
     aiAbortControllerRef.current = null;
-    aiNextPartIndexRef.current = 0;
-    aiRowsRef.current = [];
-    aiHeadersRef.current = [];
-    currentAiLogIdRef.current = null;
-    setFocusAiLogId(null);
-    setCurrentAiLogId(null);
+    if (!shouldResumeStored) {
+      aiNextPartIndexRef.current = 0;
+      aiRowsRef.current = [];
+      aiHeadersRef.current = [];
+      currentAiLogIdRef.current = null;
+      setFocusAiLogId(null);
+      setCurrentAiLogId(null);
+    }
 
     setProcessed(false);
     setHeaders([]);
@@ -177,20 +888,33 @@ const PdfStructuredExtractor: React.FC = () => {
     setDescriptionFilter('');
     setCurrentPage(1);
     lastUnfilteredPageRef.current = 1;
-    setAiHeaders([]);
-    setAiRows([]);
-    setAiPageRowCounts([]);
-    setDiff(null);
+    if (!shouldResumeStored) {
+      setAiHeaders([]);
+      setAiRows([]);
+      setAiPageRowCounts([]);
+      setDiff(null);
+    }
     setVerifyError('');
     setVerifyMessage('');
-    setTotalParts(null);
-    setProcessedParts(0);
-    setAiAnalysisState('idle');
-    setHeaderCandidate(null);
-    setConfirmedHeaders(null);
-    setHeaderDraft(null);
+    if (!shouldResumeStored) {
+      setTotalParts(null);
+      setProcessedParts(0);
+      setAiAnalysisState('idle');
+      setHeaderCandidate(null);
+      setConfirmedHeaders(null);
+      setHeaderDraft(null);
+    }
     const url = URL.createObjectURL(file);
     setPdfUrl(url);
+    if (!shouldResumeStored) {
+      aiPersistence.startNewSession({
+        file,
+        provider: selectedProvider,
+        model: effectiveModelName,
+        confirmedHeaders: [],
+        localResult: null,
+      });
+    }
     await startLocalAnalysis(file);
   };
 
@@ -231,12 +955,27 @@ const PdfStructuredExtractor: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const isModelCompatible = (provider: AiProviderId, modelName: string) => {
+    const v = (modelName || '').trim().toLowerCase();
+    if (!v) return false;
+    if (provider === 'gemini') return v.includes('gemini');
+    if (provider === 'kimi') return v.includes('kimi') || v.includes('moonshot');
+    return true;
+  };
+
   const currentModel = models.find(m => m.id === selectedModelId && m.provider === selectedProvider);
-  const effectiveModelName =
-    (customModel && customModel.trim()) || currentModel?.model || (selectedProvider === 'gemini' ? 'gemini-2.0-flash' : 'moonshot-v1-8k');
+  const defaultModelName = selectedProvider === 'gemini' ? 'gemini-2.0-flash' : 'kimi-k2-turbo-preview';
+  const selectedModelName = currentModel?.model || '';
+  const customModelName = (customModel && customModel.trim()) || '';
+  const effectiveModelName = isModelCompatible(selectedProvider, customModelName)
+    ? customModelName
+    : isModelCompatible(selectedProvider, selectedModelName)
+      ? selectedModelName
+      : defaultModelName;
 
   const handleChangeProvider = (provider: AiProviderId) => {
     setSelectedProvider(provider);
+    setCustomModel('');
     const first = models.find(m => m.provider === provider);
     if (first) {
       setSelectedModelId(first.id);
@@ -265,7 +1004,7 @@ const PdfStructuredExtractor: React.FC = () => {
           setVerifyError('API Key de Gemini no configurada (Cuenta → Configuración)');
           return;
         }
-        const result = await detectPdfHeadersWithGemini(selectedFile, geminiKey, effectiveModelName);
+        const result = await detectPdfHeadersWithGemini(selectedFile, geminiKey, effectiveModelName, temperature, topP, stream);
         if (!result.success || !result.headers) {
           setVerifyError(result.error || 'Error al detectar encabezado con Gemini');
           if (result.debugInfo) {
@@ -323,6 +1062,33 @@ const PdfStructuredExtractor: React.FC = () => {
       return;
     }
 
+    if (!resume?.keepExisting) {
+      aiPersistence.clearActive();
+      aiPersistence.startNewSession({
+        file: selectedFile,
+        provider: selectedProvider,
+        model: effectiveModelName,
+        confirmedHeaders: headersToUse,
+        localResult: headers.length > 0 && rows.length > 0 ? { headers, rows } : null,
+      });
+    } else {
+      const updated = aiPersistence.updateMeta({
+        status: 'running',
+        provider: selectedProvider,
+        model: effectiveModelName,
+        confirmedHeaders: headersToUse,
+      });
+      if (!updated) {
+        aiPersistence.startNewSession({
+          file: selectedFile,
+          provider: selectedProvider,
+          model: effectiveModelName,
+          confirmedHeaders: headersToUse,
+          localResult: headers.length > 0 && rows.length > 0 ? { headers, rows } : null,
+        });
+      }
+    }
+
     aiAbortControllerRef.current?.abort();
     const abortController = new AbortController();
     aiAbortControllerRef.current = abortController;
@@ -359,6 +1125,13 @@ const PdfStructuredExtractor: React.FC = () => {
       } else {
         setCurrentAiLogId(existingLogId);
       }
+      aiPersistence.updateMeta({
+        status: 'running',
+        currentAiLogId: logId,
+        provider: selectedProvider,
+        model: effectiveModelName,
+        confirmedHeaders: headersToUse,
+      });
 
       const upsertLog = (nextLog: AiExtractionLog) => {
         settingsDb.upsertAiLog(nextLog);
@@ -404,6 +1177,9 @@ const PdfStructuredExtractor: React.FC = () => {
         setAiLogs(prev => [currentLog, ...prev]);
       }
 
+      let lastPersistedProcessedParts = -1;
+      let lastPersistedTotalParts: number | null = null;
+
       const onProgress = ({
         totalParts,
         processedParts,
@@ -448,6 +1224,46 @@ const PdfStructuredExtractor: React.FC = () => {
         }
 
         if (kind !== 'analyze_part' || !segmentId || !status) return;
+
+        if (typeof totalParts === 'number') {
+          if (processedParts !== lastPersistedProcessedParts || totalParts !== lastPersistedTotalParts) {
+            lastPersistedProcessedParts = processedParts;
+            lastPersistedTotalParts = totalParts;
+            aiPersistence.updateMeta({
+              status: 'running',
+              totalParts,
+              processedParts,
+              nextPartIndex: processedParts,
+              currentAiLogId: logId,
+            });
+          }
+        }
+
+        if (status === 'completed' && typeof partIndex === 'number' && rows) {
+          const saveResult = aiPersistence.addPart({
+            partIndex,
+            headers: headers || aiHeadersRef.current || headersToUse,
+            rows,
+          });
+          if (!saveResult.ok) {
+            aiAbortControllerRef.current?.abort();
+            currentLog = upsertLog({ ...currentLog, status: 'stopped', endedAt: Date.now() });
+            aiPersistence.updateMeta({
+              status: 'stopped',
+              processedParts: aiNextPartIndexRef.current,
+              nextPartIndex: aiNextPartIndexRef.current,
+              totalParts: typeof totalParts === 'number' ? totalParts : null,
+            });
+            const reason = 'reason' in saveResult ? saveResult.reason : null;
+            setVerifyError(
+              reason === 'quota_exceeded'
+                ? 'No hay suficiente espacio en el almacenamiento del navegador para guardar el progreso.'
+                : 'No se pudo guardar el progreso del análisis.',
+            );
+            setAiAnalysisState('stopped');
+            return;
+          }
+        }
 
         const eventAt = Date.now();
         const requestId = `${logId}:${segmentId}`;
@@ -499,6 +1315,13 @@ const PdfStructuredExtractor: React.FC = () => {
         const geminiKey = settingsDb.getGeminiApiKey();
         if (!geminiKey) {
           currentLog = upsertLog({ ...currentLog, status: 'failed', endedAt: Date.now() });
+          aiPersistence.updateMeta({
+            status: 'failed',
+            processedParts: aiNextPartIndexRef.current,
+            nextPartIndex: aiNextPartIndexRef.current,
+            totalParts: typeof totalParts === 'number' ? totalParts : null,
+          });
+          setAiAnalysisState('failed');
           setVerifyError('API Key de Gemini no configurada (Cuenta → Configuración)');
           return;
         }
@@ -508,11 +1331,20 @@ const PdfStructuredExtractor: React.FC = () => {
           signal: abortController.signal,
           startPartIndex: resume?.startPartIndex,
           initialProcessedParts: resume?.initialProcessedParts,
-          });
+          temperature,
+          topP,
+          stream,
+        });
         if (!result.success || !result.headers || !result.rows) {
           if (result.error === 'ABORTED') {
             if (currentAiLogIdRef.current !== logId) return;
             currentLog = upsertLog({ ...currentLog, status: 'stopped', endedAt: Date.now() });
+            aiPersistence.updateMeta({
+              status: 'stopped',
+              processedParts: aiNextPartIndexRef.current,
+              nextPartIndex: aiNextPartIndexRef.current,
+              totalParts: typeof totalParts === 'number' ? totalParts : null,
+            });
             setVerifyMessage('Análisis detenido.');
             setAiAnalysisState('stopped');
             return;
@@ -522,6 +1354,12 @@ const PdfStructuredExtractor: React.FC = () => {
             status: 'failed',
             endedAt: Date.now(),
             model: result.model || effectiveModelName,
+          });
+          aiPersistence.updateMeta({
+            status: 'failed',
+            processedParts: aiNextPartIndexRef.current,
+            nextPartIndex: aiNextPartIndexRef.current,
+            totalParts: typeof totalParts === 'number' ? totalParts : null,
           });
           setAiAnalysisState('failed');
           setVerifyError(result.error || 'Error al analizar con Gemini');
@@ -541,10 +1379,23 @@ const PdfStructuredExtractor: React.FC = () => {
         setDiff(computeSimpleDiff(headers, rows, result.headers, aiRowsRef.current));
         setVerifyMessage(`Análisis completado con ${result.model || 'Gemini'}`);
         setAiAnalysisState('completed');
+        aiPersistence.updateMeta({
+          status: 'completed',
+          processedParts: aiNextPartIndexRef.current,
+          nextPartIndex: aiNextPartIndexRef.current,
+          totalParts: typeof totalParts === 'number' ? totalParts : null,
+        });
       } else if (selectedProvider === 'kimi') {
         const kimiKey = settingsDb.getKimiApiKey();
         if (!kimiKey) {
           currentLog = upsertLog({ ...currentLog, status: 'failed', endedAt: Date.now() });
+          aiPersistence.updateMeta({
+            status: 'failed',
+            processedParts: aiNextPartIndexRef.current,
+            nextPartIndex: aiNextPartIndexRef.current,
+            totalParts: typeof totalParts === 'number' ? totalParts : null,
+          });
+          setAiAnalysisState('failed');
           setVerifyError('API Key de Kimi no configurada (Cuenta → Configuración)');
           return;
         }
@@ -559,6 +1410,12 @@ const PdfStructuredExtractor: React.FC = () => {
           if (result.error === 'ABORTED') {
             if (currentAiLogIdRef.current !== logId) return;
             currentLog = upsertLog({ ...currentLog, status: 'stopped', endedAt: Date.now() });
+            aiPersistence.updateMeta({
+              status: 'stopped',
+              processedParts: aiNextPartIndexRef.current,
+              nextPartIndex: aiNextPartIndexRef.current,
+              totalParts: typeof totalParts === 'number' ? totalParts : null,
+            });
             setVerifyMessage('Análisis detenido.');
             setAiAnalysisState('stopped');
             return;
@@ -568,6 +1425,12 @@ const PdfStructuredExtractor: React.FC = () => {
             status: 'failed',
             endedAt: Date.now(),
             model: result.model || effectiveModelName,
+          });
+          aiPersistence.updateMeta({
+            status: 'failed',
+            processedParts: aiNextPartIndexRef.current,
+            nextPartIndex: aiNextPartIndexRef.current,
+            totalParts: typeof totalParts === 'number' ? totalParts : null,
           });
           setAiAnalysisState('failed');
           setVerifyError(result.error || 'Error al analizar con Kimi');
@@ -587,11 +1450,23 @@ const PdfStructuredExtractor: React.FC = () => {
         setDiff(computeSimpleDiff(headers, rows, result.headers, aiRowsRef.current));
         setVerifyMessage(`Análisis completado con ${result.model || 'Kimi'}`);
         setAiAnalysisState('completed');
+        aiPersistence.updateMeta({
+          status: 'completed',
+          processedParts: aiNextPartIndexRef.current,
+          nextPartIndex: aiNextPartIndexRef.current,
+          totalParts: typeof totalParts === 'number' ? totalParts : null,
+        });
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error desconocido';
       setVerifyError(msg);
       setAiAnalysisState('failed');
+      aiPersistence.updateMeta({
+        status: 'failed',
+        processedParts: aiNextPartIndexRef.current,
+        nextPartIndex: aiNextPartIndexRef.current,
+        totalParts: typeof totalParts === 'number' ? totalParts : null,
+      });
       try {
         if (e instanceof Error && e.stack) {
           setVerifyDebugLog(e.stack);
@@ -635,6 +1510,12 @@ const PdfStructuredExtractor: React.FC = () => {
   const handleStopAiAnalysis = () => {
     if (!isAnalyzing) return;
     aiAbortControllerRef.current?.abort();
+    aiPersistence.updateMeta({
+      status: 'stopped',
+      processedParts: aiNextPartIndexRef.current,
+      nextPartIndex: aiNextPartIndexRef.current,
+      totalParts: typeof totalParts === 'number' ? totalParts : null,
+    });
     const logId = currentAiLogIdRef.current;
     if (logId) {
       const logs = settingsDb.getAiLogs();
@@ -649,12 +1530,20 @@ const PdfStructuredExtractor: React.FC = () => {
   };
 
   const handleResumeAiAnalysis = async () => {
-    if (!selectedFile || !confirmedHeaders) return;
-    if (aiAnalysisState !== 'stopped') return;
+    if (!selectedFile) return;
+    if (aiAnalysisState !== 'stopped' && aiAnalysisState !== 'failed') return;
     if (!currentAiLogIdRef.current) return;
+    const headersToUse =
+      confirmedHeaders && confirmedHeaders.length > 0
+        ? confirmedHeaders
+        : hydratedAiSession?.meta.confirmedHeaders && hydratedAiSession.meta.confirmedHeaders.length > 0
+          ? hydratedAiSession.meta.confirmedHeaders
+          : null;
+    if (!headersToUse) return;
+    if (!confirmedHeaders) setConfirmedHeaders(headersToUse);
     const startPartIndex = aiNextPartIndexRef.current;
     if (typeof totalParts === 'number' && startPartIndex >= totalParts) return;
-    await runFullAnalysisWithHeaders(confirmedHeaders, {
+    await runFullAnalysisWithHeaders(headersToUse, {
       startPartIndex,
       initialProcessedParts: startPartIndex,
       keepExisting: true,
@@ -691,7 +1580,9 @@ const PdfStructuredExtractor: React.FC = () => {
   };
 
   const handleCancelAiAnalysis = () => {
+    if (aiAnalysisState === 'completed') return;
     aiAbortControllerRef.current?.abort();
+    aiPersistence.clearActive();
     const logId = currentAiLogIdRef.current;
     if (logId) {
       settingsDb.removeAiLog(logId);
@@ -715,6 +1606,29 @@ const PdfStructuredExtractor: React.FC = () => {
     setAiAnalysisState('idle');
   };
 
+  const handleDiscardSavedAiAnalysis = () => {
+    aiPersistence.clearActive();
+    currentAiLogIdRef.current = null;
+    setFocusAiLogId(null);
+    setCurrentAiLogId(null);
+    aiNextPartIndexRef.current = 0;
+    aiRowsRef.current = [];
+    aiHeadersRef.current = [];
+    setAiHeaders([]);
+    setAiRows([]);
+    setAiPageRowCounts([]);
+    setTotalParts(null);
+    setProcessedParts(0);
+    setDiff(null);
+    setVerifyError('');
+    setVerifyMessage('');
+    setVerifyDebugLog('');
+    setAiAnalysisState('idle');
+    setHeaderCandidate(null);
+    setConfirmedHeaders(null);
+    setHeaderDraft(null);
+  };
+
   const handleViewCurrentAiLogDetail = () => {
     const logId = currentAiLogId;
     if (!logId) return;
@@ -731,7 +1645,7 @@ const PdfStructuredExtractor: React.FC = () => {
       await runHeaderDetection();
       return;
     }
-    if (aiAnalysisState === 'stopped') {
+    if (aiAnalysisState === 'stopped' || aiAnalysisState === 'failed') {
       await handleResumeAiAnalysis();
       return;
     }
@@ -976,10 +1890,60 @@ const PdfStructuredExtractor: React.FC = () => {
             onDownloadCsv={handleDownloadCSV}
           />
 
-          <div className="border rounded-md p-3 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="font-semibold">Verificación con IA</div>
+          {hydratedAiSession &&
+            !isAnalyzing &&
+            (hydratedAiSession.meta.status === 'stopped' || hydratedAiSession.meta.status === 'failed') && (
+              <AiAnalysisResumeBanner
+                meta={hydratedAiSession.meta}
+                selectedFileMatches={!!selectedFile && aiPersistence.matchesActiveFile(selectedFile)}
+                onResume={() => {
+                  void handleResumeAiAnalysis();
+                }}
+                onDiscard={handleDiscardSavedAiAnalysis}
+              />
+            )}
+
+          {hydratedAiSession && !isAnalyzing && hydratedAiSession.meta.status === 'completed' && (
+            <div className="border rounded-md p-3 bg-muted/20 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate">Análisis guardado</div>
+                  <div className="text-xs text-muted-foreground truncate">Archivo: {hydratedAiSession.meta.file.name}</div>
+                </div>
+                <Badge variant="secondary" className="shrink-0">
+                  Completado
+                </Badge>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <Button size="sm" variant="destructive" onClick={handleDiscardSavedAiAnalysis}>
+                  Descartar análisis guardado
+                </Button>
+              </div>
             </div>
+          )}
+
+          <div className="border rounded-md p-3 space-y-3">
+            <AiVerificationHeaderBar onOpenAdvancedSettings={() => setShowAdvancedSettings(true)} />
+            <AdvancedAiSettingsDialog
+              open={showAdvancedSettings}
+              onOpenChange={setShowAdvancedSettings}
+              settings={{
+                temperature,
+                topP: typeof topP === 'number' ? topP : 1,
+                stream,
+              }}
+              onSave={(next) => {
+                try {
+                  localStorage.setItem(ADVANCED_AI_SETTINGS_STORAGE_KEY, JSON.stringify(next));
+                } catch {
+                  return;
+                }
+                setTemperature(next.temperature);
+                setTopP(next.topP);
+                setStream(next.stream);
+                showSuccess('Configuración avanzada guardada');
+              }}
+            />
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="md:col-span-2 space-y-3">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1029,60 +1993,6 @@ const PdfStructuredExtractor: React.FC = () => {
                     onChange={(e) => setCustomModel(e.target.value)}
                     placeholder={selectedProvider === 'gemini' ? 'gemini-2.0-flash' : 'kimi-k2-turbo-preview'}
                   />
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div>
-                    <Label>Temperature</Label>
-                    <div className="mt-2">
-                      <Slider
-                        value={[temperature]}
-                        onValueChange={(vals) => setTemperature(Number(vals[0]))}
-                        min={0}
-                        max={2}
-                        step={0.05}
-                      />
-                    </div>
-                    <Input
-                      className="mt-2"
-                      type="number"
-                      step="0.05"
-                      min={0}
-                      max={2}
-                      value={temperature}
-                      onChange={(e) => setTemperature(Math.max(0, Math.min(2, Number(e.target.value))))}
-                    />
-                  </div>
-                  <div>
-                    <Label>Top P</Label>
-                    <div className="mt-2">
-                      <Slider
-                        value={[typeof topP === 'number' ? topP : 1]}
-                        onValueChange={(vals) => setTopP(Number(vals[0]))}
-                        min={0}
-                        max={1}
-                        step={0.05}
-                      />
-                    </div>
-                    <Input
-                      className="mt-2"
-                      type="number"
-                      step="0.05"
-                      min={0}
-                      max={1}
-                      value={typeof topP === 'number' ? topP : 1}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setTopP(Math.max(0, Math.min(1, v)));
-                      }}
-                    />
-                  </div>
-                  <div className="flex flex-col">
-                    <Label>Stream</Label>
-                    <div className="mt-2 flex items-center gap-2">
-                      <Switch checked={stream} onCheckedChange={setStream} />
-                      <span className="text-sm text-muted-foreground">{stream ? 'On' : 'Off'}</span>
-                    </div>
-                  </div>
                 </div>
               </div>
               <div className="space-y-3">
@@ -1182,32 +2092,58 @@ const PdfStructuredExtractor: React.FC = () => {
                   </div>
                 </div>
               )}
-              {totalParts && totalParts > 0 && aiAnalysisState !== 'idle' && (
+              {(() => {
+                const selectedMatchesStored = !!selectedFile && !!hydratedAiSession && aiPersistence.matchesActiveFile(selectedFile);
+                const storedHasProgress =
+                  selectedMatchesStored &&
+                  hydratedAiSession.meta.status !== 'completed' &&
+                  (hydratedAiSession.meta.processedParts > 0 || hydratedAiSession.meta.savedPartIndices.length > 0);
+                const shouldShowControls =
+                  isAnalyzing || (!!selectedFile && (aiAnalysisState !== 'idle' || storedHasProgress));
+
+                if (!shouldShowControls) return null;
+
+                const displayTotalParts =
+                  typeof totalParts === 'number' && totalParts > 0
+                    ? totalParts
+                    : selectedMatchesStored
+                      ? hydratedAiSession.meta.totalParts
+                      : null;
+                const displayProcessedParts =
+                  processedParts > 0 ? processedParts : selectedMatchesStored ? hydratedAiSession.meta.processedParts : 0;
+                const hasTotalParts = typeof displayTotalParts === 'number' && displayTotalParts > 0;
+                const hasAnyProgress = hasTotalParts || displayProcessedParts > 0 || isAnalyzing;
+                if (!hasAnyProgress) return null;
+
+                const canRestart =
+                  !!selectedFile &&
+                  ((confirmedHeaders && confirmedHeaders.length > 0) ||
+                    (selectedMatchesStored && hydratedAiSession.meta.confirmedHeaders.length > 0));
+
+                return (
                 <div className="space-y-1">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex justify-between text-xs text-muted-foreground flex-1">
                       <span>
-                        Progreso del análisis: {processedParts}/{totalParts} partes
+                        Progreso del análisis:{' '}
+                        {hasTotalParts ? `${displayProcessedParts}/${displayTotalParts} partes` : `${displayProcessedParts} partes`}
                       </span>
-                      <span>
-                        {Math.round((processedParts / totalParts) * 100)}%
-                      </span>
+                      {hasTotalParts && (
+                        <span>{Math.round((displayProcessedParts / displayTotalParts) * 100)}%</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <Button size="sm" variant="destructive" onClick={handleStopAiAnalysis} disabled={!isAnalyzing}>
                         <Square className="h-4 w-4 mr-1" />
                         Parar
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={handleResumeAiAnalysis}
-                        disabled={aiAnalysisState !== 'stopped' || isAnalyzing}
-                      >
-                        <Play className="h-4 w-4 mr-1" />
-                        Continuar
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={handleRestartAiAnalysis} disabled={!confirmedHeaders}>
+                      {(aiAnalysisState === 'stopped' || aiAnalysisState === 'failed') && (
+                        <Button size="sm" variant="secondary" onClick={handleResumeAiAnalysis} disabled={isAnalyzing}>
+                          <Play className="h-4 w-4 mr-1" />
+                          Continuar
+                        </Button>
+                      )}
+                      <Button size="sm" variant="outline" onClick={handleRestartAiAnalysis} disabled={!canRestart}>
                         <RotateCcw className="h-4 w-4 mr-1" />
                         Reiniciar
                       </Button>
@@ -1215,7 +2151,7 @@ const PdfStructuredExtractor: React.FC = () => {
                         size="sm"
                         variant="destructive"
                         onClick={handleCancelAiAnalysis}
-                        disabled={aiAnalysisState === 'idle'}
+                        disabled={aiAnalysisState === 'completed'}
                       >
                         <Trash2 className="h-4 w-4 mr-1" />
                         Cancelar
@@ -1230,9 +2166,12 @@ const PdfStructuredExtractor: React.FC = () => {
                       </Button>
                     </div>
                   </div>
-                  <Progress value={(processedParts / totalParts) * 100} />
+                  {hasTotalParts && (
+                    <Progress value={(displayProcessedParts / displayTotalParts) * 100} />
+                  )}
                 </div>
-              )}
+                );
+              })()}
             </div>
             {verifyMessage && (
               <div className="text-sm text-green-600">{verifyMessage}</div>

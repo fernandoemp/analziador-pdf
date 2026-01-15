@@ -87,13 +87,25 @@ export const useAiPdfVerification = ({
 
   const effectiveModelName = useMemo(() => {
     const v = customModel && customModel.trim();
-    if (v) return v;
-    if (currentModel?.model) return currentModel.model;
-    return selectedProvider === 'gemini' ? 'gemini-2.0-flash' : 'moonshot-v1-8k';
+    const isCompatible = (provider: AiProviderId, modelName: string) => {
+      const name = (modelName || '').trim().toLowerCase();
+      if (!name) return false;
+      if (provider === 'gemini') return name.includes('gemini');
+      if (provider === 'kimi') return name.includes('kimi') || name.includes('moonshot');
+      return true;
+    };
+
+    const defaultModelName = selectedProvider === 'gemini' ? 'gemini-2.0-flash' : 'kimi-k2-turbo-preview';
+    const selectedModelName = currentModel?.model || '';
+
+    if (isCompatible(selectedProvider, v || '')) return v!;
+    if (isCompatible(selectedProvider, selectedModelName)) return selectedModelName;
+    return defaultModelName;
   }, [customModel, currentModel?.model, selectedProvider]);
 
   const handleChangeProvider = (provider: AiProviderId) => {
     setSelectedProvider(provider);
+    setCustomModel('');
     const first = models.find(m => m.provider === provider);
     if (first) {
       setSelectedModelId(first.id);
@@ -122,7 +134,7 @@ export const useAiPdfVerification = ({
           setVerifyError('API Key de Gemini no configurada (Cuenta → Configuración)');
           return;
         }
-        const result = await detectPdfHeadersWithGemini(selectedFile, geminiKey, effectiveModelName);
+        const result = await detectPdfHeadersWithGemini(selectedFile, geminiKey, effectiveModelName, temperature, topP, stream);
         if (!result.success || !result.headers) {
           setVerifyError(result.error || 'Error al detectar encabezado con Gemini');
           if (result.debugInfo) {
@@ -209,6 +221,9 @@ export const useAiPdfVerification = ({
               setAiPageRowCounts(prev => [...prev, rows.length]);
             }
           },
+          temperature,
+          topP,
+          stream,
         });
         if (!result.success || !result.headers || !result.rows) {
           setVerifyError(result.error || 'Error al analizar con Gemini');

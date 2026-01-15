@@ -172,7 +172,7 @@ const UsersManagement: React.FC = () => {
       showSuccess(`Usuario "${formData.name}" actualizado`);
     } else {
       // Crear
-      const newUser = {
+      const newUser: StoredUser = {
         id: uuidv4(),
         ...formData,
         status: 'active',
@@ -191,7 +191,7 @@ const UsersManagement: React.FC = () => {
     const allUsers = getUsers();
     const updatedUsers = allUsers.map(u =>
       u.id === user.id
-        ? { ...u, status: u.status === 'active' ? 'inactive' : 'active' }
+        ? { ...u, status: (u.status === 'active' ? 'inactive' : 'active') as StoredUser['status'] }
         : u
     );
     saveUsers(updatedUsers);
@@ -331,7 +331,7 @@ const UsersManagement: React.FC = () => {
 
             <div className="space-y-2">
               <Label htmlFor="role">Rol *</Label>
-              <Select value={formData.role} onValueChange={(value) => setFormData({ ...formData, role: value })}>
+              <Select value={formData.role} onValueChange={(value) => setFormData({ ...formData, role: value as UserRole })}>
                 <SelectTrigger id="role">
                   <SelectValue placeholder="Selecciona un rol" />
                 </SelectTrigger>

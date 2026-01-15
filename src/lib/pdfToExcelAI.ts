@@ -50,6 +50,9 @@ type PdfAnalysisOptions = {
   signal?: AbortSignal;
   startPartIndex?: number;
   initialProcessedParts?: number;
+  temperature?: number;
+  topP?: number;
+  stream?: boolean;
 };
 
 type PdfHeaderDetectionResult = {
@@ -71,6 +74,25 @@ type GeminiUsageMetadata = {
   promptTokenCount?: number;
   candidatesTokenCount?: number;
   totalTokenCount?: number;
+};
+
+type GeminiResponse = {
+  text: () => string;
+  usageMetadata?: GeminiUsageMetadata;
+  modelVersion?: unknown;
+};
+
+type GeminiGenerateContentResult = {
+  response: Promise<GeminiResponse>;
+};
+
+type GeminiStreamChunk = {
+  text: () => string;
+};
+
+type GeminiStreamResult = {
+  stream: AsyncIterable<GeminiStreamChunk>;
+  response: Promise<GeminiResponse>;
 };
 
 // Importar pdfjs-dist de forma lazy
@@ -157,7 +179,10 @@ const extractJsonFromModelText = (text: string) => {
 export const detectPdfHeadersWithGemini = async (
   pdfFile: File,
   apiKey: string,
-  modelName = 'gemini-2.0-flash'
+  modelName = 'gemini-2.0-flash',
+  temperature?: number,
+  topP?: number,
+  stream?: boolean
 ): Promise<PdfHeaderDetectionResult> => {
   try {
     if (!apiKey || apiKey.trim() === '') {
@@ -175,8 +200,8 @@ export const detectPdfHeadersWithGemini = async (
     const model = genAI.getGenerativeModel({
       model: modelName,
       generationConfig: {
-        temperature: 0.1,
-        topP: 0.95,
+        temperature: typeof temperature === 'number' ? temperature : 0.1,
+        topP: typeof topP === 'number' ? topP : 0.95,
         topK: 40,
       },
     });
@@ -205,9 +230,22 @@ REGLAS IMPORTANTES:
 
 RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
 
-    const result = await model.generateContent(prompt);
+    const shouldStream = !!stream;
+    const modelWithStream = model as unknown as {
+      generateContentStream?: (prompt: string) => Promise<GeminiStreamResult>;
+    };
+    const result = shouldStream && typeof modelWithStream.generateContentStream === 'function'
+      ? await modelWithStream.generateContentStream(prompt)
+      : ((await model.generateContent(prompt)) as unknown as GeminiGenerateContentResult);
     const response = await result.response;
-    const text = response.text();
+    let text = '';
+    if (shouldStream && 'stream' in result) {
+      for await (const chunk of (result as GeminiStreamResult).stream) {
+        text += chunk.text();
+      }
+    } else {
+      text = response.text();
+    }
 
     const geminiMeta = response as unknown as { usageMetadata?: GeminiUsageMetadata; modelVersion?: unknown };
     const usageMeta = geminiMeta.usageMetadata;
@@ -280,8 +318,8 @@ export const analyzePDFWithGemini = async (
     const model = genAI.getGenerativeModel({
       model: modelName,
       generationConfig: {
-        temperature: 0.1,
-        topP: 0.95,
+        temperature: typeof options?.temperature === 'number' ? options.temperature : 0.1,
+        topP: typeof options?.topP === 'number' ? options.topP : 0.95,
         topK: 40,
       },
     });
@@ -381,9 +419,25 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
         status: 'in_progress',
       });
 
-      const result = await model.generateContent(prompt);
+      const shouldStream = !!options?.stream;
+      const modelWithStream = model as unknown as {
+        generateContentStream?: (prompt: string) => Promise<GeminiStreamResult>;
+      };
+      const result = shouldStream && typeof modelWithStream.generateContentStream === 'function'
+        ? await modelWithStream.generateContentStream(prompt)
+        : ((await model.generateContent(prompt)) as unknown as GeminiGenerateContentResult);
       const response = await result.response;
-      const text = response.text();
+      let text = '';
+      if (shouldStream && 'stream' in result) {
+        for await (const chunk of (result as GeminiStreamResult).stream) {
+          if (options?.signal?.aborted) {
+            return { success: false, error: 'ABORTED', model: modelName };
+          }
+          text += chunk.text();
+        }
+      } else {
+        text = response.text();
+      }
       const partEndedAt = Date.now();
       const partElapsedMs = partEndedAt - partStartedAt;
 
