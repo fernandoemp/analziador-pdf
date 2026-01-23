@@ -200,25 +200,6 @@ export default function Login({ authStorageKey }: Props) {
             </form>
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Usuarios de prueba</CardTitle>
-            <CardDescription>
-              Credenciales hardcodeadas para el entorno de testing.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2 text-sm">
-              {DEMO_USERS.map((u) => (
-                <div key={u.email} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                  <div className="font-medium">{u.email}</div>
-                  <div className="font-mono text-muted-foreground">{u.password}</div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );
