@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import {
   settingsDb,
   type AiExtractionLog,
@@ -13,6 +13,7 @@ import {
   detectPdfHeadersWithKimi,
 } from '@/lib/pdfToExcelAI';
 import { computeInvalidAmountRows, computeSimpleDiff, normalizeHeaderText } from '@/lib/pdfStructuredExtractorUtils';
+import { matchesSearchTokens, tokenizeSearchQuery, normalizeSearchText } from '@/lib/textSearch';
 import { useAiAnalysisPersistence } from '@/hooks/useAiAnalysisPersistence';
 
 export const useAiPdfVerification = ({
@@ -24,6 +25,7 @@ export const useAiPdfVerification = ({
   localHeaders: string[];
   localRows: string[][];
 }) => {
+  const AI_PREFS_STORAGE_KEY = 'pdf-structured-extractor:ai-preferences:v1';
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const [verifyError, setVerifyError] = useState<string>('');
   const [verifyMessage, setVerifyMessage] = useState<string>('');
@@ -62,7 +64,6 @@ export const useAiPdfVerification = ({
 
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
   const [descriptionFilter, setDescriptionFilter] = useState<string>('');
-  const deferredDescriptionFilter = useDeferredValue(descriptionFilter);
   const [isFilterPending, startFilterTransition] = useTransition();
   const [currentPage, setCurrentPage] = useState<number>(1);
   const lastUnfilteredPageRef = useRef<number>(1);
@@ -86,17 +87,61 @@ export const useAiPdfVerification = ({
   useEffect(() => {
     const initialModels = settingsDb.getAiModels();
     setModels(initialModels);
-    const firstGemini = initialModels.find(m => m.provider === 'gemini');
-    const firstKimi = initialModels.find(m => m.provider === 'kimi');
-    if (firstGemini) {
-      setSelectedModelId(firstGemini.id);
-    } else if (firstKimi) {
-      setSelectedProvider('kimi');
-      setSelectedModelId(firstKimi.id);
-    }
+    const readPrefs = () => {
+      try {
+        const raw = localStorage.getItem(AI_PREFS_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== 'object') return null;
+        const p = parsed as { provider?: unknown; modelId?: unknown; customModel?: unknown };
+        const provider = p.provider === 'gemini' || p.provider === 'kimi' ? p.provider : null;
+        if (!provider) return null;
+        return {
+          provider,
+          modelId: typeof p.modelId === 'string' ? p.modelId : '',
+          customModel: typeof p.customModel === 'string' ? p.customModel : '',
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const resolveDefaultModelId = (provider: AiProviderId) => {
+      if (initialModels.length === 0) return '';
+      if (provider === 'gemini') {
+        const preferred = initialModels.find((m) => m.provider === 'gemini' && m.id === 'gemini-2.5-pro');
+        if (preferred) return preferred.id;
+      }
+      const firstForProvider = initialModels.find((m) => m.provider === provider);
+      if (firstForProvider) return firstForProvider.id;
+      return initialModels[0]?.id ?? '';
+    };
+
+    const prefs = readPrefs();
+    const initialProvider: AiProviderId = prefs?.provider ?? 'gemini';
+    const initialModelId =
+      prefs?.modelId && initialModels.some((m) => m.provider === initialProvider && m.id === prefs.modelId)
+        ? prefs.modelId
+        : resolveDefaultModelId(initialProvider);
+
+    setSelectedProvider(initialProvider);
+    setSelectedModelId(initialModelId);
+    if (typeof prefs?.customModel === 'string') setCustomModel(prefs.customModel);
+
     const initialLogs = settingsDb.getAiLogs();
     setAiLogs(initialLogs);
-  }, []);
+  }, [AI_PREFS_STORAGE_KEY]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        AI_PREFS_STORAGE_KEY,
+        JSON.stringify({ provider: selectedProvider, modelId: selectedModelId, customModel }),
+      );
+    } catch {
+      return;
+    }
+  }, [AI_PREFS_STORAGE_KEY, customModel, selectedModelId, selectedProvider]);
 
   useEffect(() => {
     if (models.length === 0) {
@@ -972,20 +1017,34 @@ export const useAiPdfVerification = ({
     return idx >= 0 ? idx : null;
   }, [headerNormalized]);
 
-  const normalizedQuery = useMemo(() => deferredDescriptionFilter.trim().toLowerCase(), [deferredDescriptionFilter]);
+  const normalizedQuery = useMemo(() => normalizeSearchText(descriptionFilter), [descriptionFilter]);
+  const queryTokens = useMemo(() => tokenizeSearchQuery(descriptionFilter), [descriptionFilter]);
+
+  const rowSearchText = useMemo(() => {
+    if (aiRows.length === 0) return [];
+    const texts: string[] = new Array(aiRows.length);
+    for (let i = 0; i < aiRows.length; i++) {
+      const r = aiRows[i] || [];
+      const raw = descriptionColIndex !== null ? (r?.[descriptionColIndex] ?? '') : r.join(' ');
+      texts[i] = normalizeSearchText(raw);
+    }
+    return texts;
+  }, [aiRows, descriptionColIndex]);
 
   const dateOptions = useMemo(() => {
     if (dateColIndex === null) return [];
     const totals = new Map<string, number>();
     const matches = new Map<string, number>();
-    const hasQuery = normalizedQuery.length > 0;
-    for (const r of aiRows) {
+    const hasQuery = queryTokens.length > 0;
+    for (let i = 0; i < aiRows.length; i++) {
+      const r = aiRows[i];
+      if (!r) continue;
       const raw = (r?.[dateColIndex] ?? '').trim();
       if (!raw) continue;
       totals.set(raw, (totals.get(raw) || 0) + 1);
       if (!hasQuery) continue;
-      const hay = (descriptionColIndex !== null ? (r?.[descriptionColIndex] ?? '') : (r || []).join(' ')).toLowerCase();
-      if (hay.includes(normalizedQuery)) {
+      const hay = rowSearchText[i] ?? '';
+      if (matchesSearchTokens(hay, queryTokens)) {
         matches.set(raw, (matches.get(raw) || 0) + 1);
       }
     }
@@ -1012,7 +1071,7 @@ export const useAiPdfVerification = ({
       .map(([value, total]) => ({ value, total, matches: matches.get(value) || 0, sortKey: parseDateForSort(value) }))
       .sort((a, b) => (a.sortKey !== b.sortKey ? a.sortKey - b.sortKey : a.value.localeCompare(b.value, 'es')))
       .map(({ value, total, matches }) => ({ value, total, matches }));
-  }, [aiRows, dateColIndex, descriptionColIndex, normalizedQuery]);
+  }, [aiRows, dateColIndex, queryTokens, rowSearchText]);
 
   const selectedDatesSet = useMemo(() => new Set(selectedDates), [selectedDates]);
 
@@ -1025,7 +1084,7 @@ export const useAiPdfVerification = ({
   const filteredRowIndices = useMemo(() => {
     const indices: number[] = [];
     const hasDateFilter = selectedDates.length > 0 && dateColIndex !== null;
-    const hasQuery = normalizedQuery.length > 0;
+    const hasQuery = queryTokens.length > 0;
 
     for (let i = 0; i < aiRows.length; i++) {
       const r = aiRows[i];
@@ -1037,15 +1096,15 @@ export const useAiPdfVerification = ({
       }
 
       if (hasQuery) {
-        const hay = (descriptionColIndex !== null ? (r[descriptionColIndex] ?? '') : r.join(' ')).toLowerCase();
-        if (!hay.includes(normalizedQuery)) continue;
+        const hay = rowSearchText[i] ?? '';
+        if (!matchesSearchTokens(hay, queryTokens)) continue;
       }
 
       indices.push(i);
     }
 
     return indices;
-  }, [aiRows, dateColIndex, descriptionColIndex, normalizedQuery, selectedDates, selectedDatesSet]);
+  }, [aiRows, dateColIndex, queryTokens, rowSearchText, selectedDates, selectedDatesSet]);
 
   const hasActiveFilters = selectedDates.length > 0 || descriptionFilter.trim().length > 0;
 
