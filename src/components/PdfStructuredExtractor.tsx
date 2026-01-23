@@ -1,10 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,7 +22,6 @@ import {
   AdvancedAiSettingsDialog,
   AiVerificationHeaderBar,
 } from '@/components/pdf-structured-extractor/AdvancedAiSettingsDialog';
-import { LocalStorageMonitor } from '@/components/pdf-structured-extractor/LocalStorageMonitor';
 import { PdfLocalControls } from '@/components/pdf-structured-extractor/PdfLocalControls';
 import { useAiPdfVerification } from '@/hooks/useAiPdfVerification';
 import { useLocalPdfAnalysis } from '@/hooks/useLocalPdfAnalysis';
@@ -250,8 +246,6 @@ const PdfStructuredExtractor: React.FC = () => {
             onDownloadCsv={handleDownloadCSV}
           />
 
-          <LocalStorageMonitor />
-
           {ai.hydratedAiSession &&
             !ai.isAnalyzing &&
             (ai.hydratedAiSession.meta.status === 'stopped' || ai.hydratedAiSession.meta.status === 'failed') && (
@@ -306,74 +300,14 @@ const PdfStructuredExtractor: React.FC = () => {
                 showSuccess('Configuración avanzada guardada');
               }}
             />
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="md:col-span-2 space-y-3">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <Label>Proveedor</Label>
-                    <Select
-                      value={ai.selectedProvider}
-                      onValueChange={(val) => ai.handleChangeProvider(val as 'gemini' | 'kimi')}
-                    >
-                      <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Selecciona proveedor" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="gemini">Gemini</SelectItem>
-                        <SelectItem value="kimi">Kimi</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label>Modelo</Label>
-                    <Select
-                      value={
-                        ai.models.some(m => m.id === ai.selectedModelId && m.provider === ai.selectedProvider)
-                          ? ai.selectedModelId
-                          : undefined
-                      }
-                      onValueChange={ai.setSelectedModelId}
-                    >
-                      <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Selecciona modelo" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ai.models
-                          .filter(m => m.provider === ai.selectedProvider)
-                          .map(m => (
-                            <SelectItem key={m.id} value={m.id}>
-                              {m.label} ({m.model})
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div>
-                  <Label htmlFor="custom-model">Modelo personalizado</Label>
-                  <Input
-                    id="custom-model"
-                    type="text"
-                    value={ai.customModel}
-                    onChange={(e) => ai.setCustomModel(e.target.value)}
-                    placeholder={ai.selectedProvider === 'gemini' ? 'gemini-2.0-flash' : 'kimi-k2-turbo-preview'}
-                  />
-                </div>
-              </div>
-              <div className="space-y-3">
-                <div className="mt-4 text-xs text-muted-foreground">
-                  La configuración de API Keys se realiza en Mi Cuenta → Configuración (Gemini y Kimi).
-                </div>
-              </div>
-            </div>
-              <div className="mt-4 flex flex-col gap-2">
-                <div className="flex items-end gap-2">
-                  <Button variant="secondary" onClick={ai.handleAnalyzeWithAI} disabled={!selectedFile || ai.isAnalyzing}>
-                    {ai.isAnalyzing
-                      ? 'Analizando...'
-                    : ai.confirmedHeaders
-                      ? 'Analizar movimientos con IA'
-                      : 'Detectar encabezado con IA'}
+            <div className="mt-4 flex flex-col gap-2">
+              <div className="flex items-end gap-2">
+                <Button variant="secondary" onClick={ai.handleAnalyzeWithAI} disabled={!selectedFile || ai.isAnalyzing}>
+                  {ai.isAnalyzing
+                    ? 'Analizando...'
+                  : ai.confirmedHeaders
+                    ? 'Analizar movimientos con IA'
+                    : 'Detectar encabezado con IA'}
                 </Button>
                 <Button
                   variant="outline"

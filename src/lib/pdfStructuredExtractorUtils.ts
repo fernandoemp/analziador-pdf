@@ -45,7 +45,7 @@ export const normalizeHeaderText = (value: string) =>
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
 
-const detectAmountColumnsFromHeaders = (headers: string[]) => {
+export const detectAmountColumnsFromHeaders = (headers: string[]) => {
   let creditIndex = -1;
   let debitIndex = -1;
 

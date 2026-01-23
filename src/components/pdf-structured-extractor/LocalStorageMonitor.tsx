@@ -29,8 +29,8 @@ const estimateLocalStorageBytesUsed = () => {
   return total;
 };
 
-export const LocalStorageMonitor = () => {
-  const [open, setOpen] = useState(false);
+export const LocalStorageMonitor = ({ defaultOpen = false }: { defaultOpen?: boolean }) => {
+  const [open, setOpen] = useState(defaultOpen);
   const [usedBytes, setUsedBytes] = useState(0);
   const [keyCount, setKeyCount] = useState(0);
 
