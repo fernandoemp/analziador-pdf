@@ -15,6 +15,7 @@ type Props = {
 };
 
 const AI_PREFS_STORAGE_KEY = 'pdf-structured-extractor:ai-preferences:v1';
+const AI_PREFS_CHANGED_EVENT = 'pdf-structured-extractor:ai-preferences:changed';
 
 type AiPrefs = {
   provider: AiProviderId;
@@ -100,6 +101,7 @@ const Navbar: React.FC<Props> = ({ authStorageKey }) => {
         AI_PREFS_STORAGE_KEY,
         JSON.stringify({ provider, modelId, customModel } satisfies AiPrefs),
       );
+      window.dispatchEvent(new Event(AI_PREFS_CHANGED_EVENT));
     } catch {
       return;
     }
@@ -174,7 +176,13 @@ const Navbar: React.FC<Props> = ({ authStorageKey }) => {
                 </div>
                 <div>
                   <Label>Modelo</Label>
-                  <Select value={modelId || undefined} onValueChange={setModelId}>
+                  <Select
+                    value={modelId || undefined}
+                    onValueChange={(val) => {
+                      setModelId(val);
+                      setCustomModel('');
+                    }}
+                  >
                     <SelectTrigger className="mt-1">
                       <SelectValue placeholder="Selecciona modelo" />
                     </SelectTrigger>
