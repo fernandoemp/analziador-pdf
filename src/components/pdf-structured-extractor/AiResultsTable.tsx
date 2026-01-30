@@ -768,7 +768,7 @@ export const AiResultsTable: React.FC<Props> = ({
       </div>
 
       {showPagination && !hasActiveFilters && aiRows.length > 0 && totalPages > 1 && (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-2 text-xs text-muted-foreground p-3 border-t">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center justify-center sm:gap-2 text-xs text-muted-foreground p-3 border-t">
           <span>
             Página {safeCurrentPage} de {totalPages}
           </span>

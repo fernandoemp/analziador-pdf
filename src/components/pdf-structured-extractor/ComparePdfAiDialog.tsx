@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Progress } from '@/components/ui/progress';
 import { AiResultsTable, type AiResultsTableProps } from '@/components/pdf-structured-extractor/AiResultsTable';
 import {
   cleanupValidatorStates,
@@ -148,29 +149,56 @@ export const PdfValidatorDialog: React.FC<Props> = ({
               <div className="p-4 text-sm text-muted-foreground">Selecciona un PDF para visualizarlo.</div>
             )}
           </div>
-          <div ref={aiScrollRef} className="flex-1 border rounded-md overflow-auto bg-muted/40 p-2">
+          <div className="flex-1 border rounded-md bg-muted/40 p-2 flex flex-col min-h-0">
             {aiTableProps.aiHeaders.length > 0 ? (
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="validator-page-toggle"
-                      checked={currentPageChecked}
-                      onCheckedChange={() => {
-                        const next = validatedPages.slice();
-                        next[safeCurrentPage - 1] = !currentPageChecked;
-                        setValidatedPages(next);
-                        persistState(next, safeCurrentPage, { showFeedback: true });
-                      }}
-                    />
-                    <label htmlFor="validator-page-toggle" className="text-sm select-none cursor-pointer">
-                      Validar página {safeCurrentPage}
-                    </label>
-                    <Badge variant="secondary" className="text-xs">
-                      {validatedCount}/{safeTotalPages || 1}
-                    </Badge>
+              <>
+                <div className="bg-muted/30 border rounded-md p-3 mb-2 flex flex-col gap-2 flex-none">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="validator-page-toggle"
+                        checked={currentPageChecked}
+                        onCheckedChange={() => {
+                          const next = validatedPages.slice();
+                          next[safeCurrentPage - 1] = !currentPageChecked;
+                          setValidatedPages(next);
+                          persistState(next, safeCurrentPage, { showFeedback: true });
+                        }}
+                      />
+                      <label
+                        htmlFor="validator-page-toggle"
+                        className="text-sm font-medium cursor-pointer select-none flex items-center gap-2"
+                      >
+                        {currentPageChecked ? (
+                          <span className="text-green-600">Página {safeCurrentPage} validada</span>
+                        ) : (
+                          <span>Marcar página {safeCurrentPage} como validada</span>
+                        )}
+                      </label>
+                    </div>
+                    {saveFeedback?.kind === 'saved' && (
+                      <div className="text-xs text-green-600 font-medium">Guardado</div>
+                    )}
+                    {saveFeedback?.kind === 'error' && (
+                      <div className="text-xs text-destructive">{saveFeedback.message || 'Error al guardar'}</div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2">
+
+                  <div className="flex items-center gap-3">
+                    <Progress
+                      value={safeTotalPages > 0 ? (validatedCount / safeTotalPages) * 100 : 0}
+                      className="h-2 flex-1"
+                    />
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      {validatedCount} de {safeTotalPages} completadas
+                    </span>
+                  </div>
+                </div>
+                <div ref={aiScrollRef} className="flex-1 overflow-auto min-h-0">
+                  <AiResultsTable {...aiTableProps} />
+                </div>
+                {!aiTableProps.hasActiveFilters && safeTotalPages > 1 && (
+                  <div className="flex items-center justify-center gap-2 pt-2 flex-none">
                     <div className="text-xs text-muted-foreground">
                       Página {safeCurrentPage} de {safeTotalPages || 1}
                     </div>
@@ -201,16 +229,8 @@ export const PdfValidatorDialog: React.FC<Props> = ({
                       Siguiente
                     </Button>
                   </div>
-                  {saveFeedback?.kind === 'saved' ? (
-                    <div className="text-xs text-green-600">Guardado</div>
-                  ) : saveFeedback?.kind === 'error' ? (
-                    <div className="text-xs text-destructive">{saveFeedback.message || 'Error al guardar'}</div>
-                  ) : (
-                    <div />
-                  )}
-                </div>
-                <AiResultsTable {...aiTableProps} />
-              </div>
+                )}
+              </>
             ) : (
               <div className="p-4 text-sm text-muted-foreground">Ejecuta un análisis con IA para ver resultados.</div>
             )}

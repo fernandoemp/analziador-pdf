@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Loader2 } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,7 +26,7 @@ import {
 import { PdfLocalControls } from '@/components/pdf-structured-extractor/PdfLocalControls';
 import { useAiPdfVerification } from '@/hooks/useAiPdfVerification';
 import { useLocalPdfAnalysis } from '@/hooks/useLocalPdfAnalysis';
-import { getFileFingerprint, loadValidatorState, normalizeValidatorState } from '@/lib/ai-analysis-persistence/storage';
+import { getFileFingerprint, loadValidatorState, normalizeValidatorState, removeValidatorState } from '@/lib/ai-analysis-persistence/storage';
 import { showSuccess } from '@/utils/toast';
 
 const ADVANCED_AI_SETTINGS_STORAGE_KEY = 'pdf-structured-extractor:advanced-ai-settings:v1';
@@ -87,6 +88,18 @@ const PdfStructuredExtractor: React.FC = () => {
   };
 
   const handleFile = async (file: File) => {
+    if (selectedFile) {
+      const prevFingerprint = getFileFingerprint(selectedFile);
+      const nextFingerprint = getFileFingerprint(file);
+      if (
+        prevFingerprint.name !== nextFingerprint.name ||
+        prevFingerprint.size !== nextFingerprint.size ||
+        prevFingerprint.lastModified !== nextFingerprint.lastModified ||
+        prevFingerprint.type !== nextFingerprint.type
+      ) {
+        removeValidatorState(prevFingerprint);
+      }
+    }
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
 
     setHeaders([]);
@@ -167,6 +180,7 @@ const PdfStructuredExtractor: React.FC = () => {
   );
 
   const validatorTotalPages = Math.max(0, Math.floor(ai.totalPages));
+  const showAiSpinnerCentered = ai.isAnalyzing && ai.aiRows.length === 0;
 
   useEffect(() => {
     if (!validatorFingerprint || validatorTotalPages <= 0) {
@@ -221,6 +235,9 @@ const PdfStructuredExtractor: React.FC = () => {
     ((ai.confirmedHeaders && ai.confirmedHeaders.length > 0) ||
       (selectedMatchesStored && (ai.hydratedAiSession?.meta.confirmedHeaders?.length ?? 0) > 0));
 
+  const isValidationComplete = !!validatorProgress && validatorProgress.total > 0 && validatorProgress.validated >= validatorProgress.total;
+  const hasDetectedRecords = ai.aiRows.length > 0;
+
   return (
     <Card className="w-full">
       <CardHeader>
@@ -271,7 +288,17 @@ const PdfStructuredExtractor: React.FC = () => {
                 </Badge>
               </div>
               <div className="flex items-center justify-end gap-2">
-                <Button size="sm" variant="destructive" onClick={ai.handleDiscardSavedAiAnalysis}>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => {
+                    ai.handleDiscardSavedAiAnalysis();
+                    if (validatorFingerprint) {
+                      removeValidatorState(validatorFingerprint);
+                      setValidatorProgress(validatorTotalPages > 0 ? { validated: 0, total: validatorTotalPages } : null);
+                    }
+                  }}
+                >
                   Descartar análisis guardado
                 </Button>
               </div>
@@ -304,7 +331,7 @@ const PdfStructuredExtractor: React.FC = () => {
               }}
             />
             <div className="mt-4 flex flex-col gap-2">
-              <div className="flex items-end gap-2">
+              <div className="flex items-center gap-2">
                 <Button variant="secondary" onClick={ai.handleAnalyzeWithAI} disabled={!selectedFile || ai.isAnalyzing}>
                   {ai.isAnalyzing
                     ? 'Analizando...'
@@ -312,19 +339,24 @@ const PdfStructuredExtractor: React.FC = () => {
                     ? 'Analizar movimientos con IA'
                     : 'Detectar encabezado con IA'}
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowValidatorModal(true)}
-                  disabled={ai.aiHeaders.length === 0}
-                >
-                  Validador
-                </Button>
-                {validatorProgress && ai.aiHeaders.length > 0 && (
-                  <Badge
-                    variant={validatorProgress.total > 0 && validatorProgress.validated >= validatorProgress.total ? 'secondary' : 'outline'}
-                    className="text-xs"
+                {hasDetectedRecords && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowValidatorModal(true)}
+                    disabled={ai.aiHeaders.length === 0}
                   >
-                    Validación: {validatorProgress.validated}/{validatorProgress.total || 1}
+                    Validador
+                  </Button>
+                )}
+                {hasDetectedRecords && validatorProgress && ai.aiHeaders.length > 0 && (
+                  <Badge
+                    variant={isValidationComplete ? 'secondary' : 'outline'}
+                    className="text-xs font-medium px-2.5 py-1 rounded-full flex items-center gap-2"
+                  >
+                    <span className={`h-2 w-2 rounded-full ${isValidationComplete ? 'bg-green-500' : 'bg-amber-500'}`} />
+                    <span>
+                      Validación: {validatorProgress.validated}/{validatorProgress.total || 1}
+                    </span>
                   </Badge>
                 )}
               </div>
@@ -393,7 +425,13 @@ const PdfStructuredExtractor: React.FC = () => {
               onPdfScroll={syncScroll}
             />
 
-            {ai.aiHeaders.length > 0 && (
+            {showAiSpinnerCentered && (
+              <div className="flex items-center justify-center border rounded-md py-14">
+                <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
+              </div>
+            )}
+
+            {!showAiSpinnerCentered && ai.aiHeaders.length > 0 && (
               <AiResultsTable {...aiResultsTableProps} />
             )}
 
