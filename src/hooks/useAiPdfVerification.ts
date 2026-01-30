@@ -26,6 +26,7 @@ export const useAiPdfVerification = ({
   localRows: string[][];
 }) => {
   const AI_PREFS_STORAGE_KEY = 'pdf-structured-extractor:ai-preferences:v1';
+  const AI_PREFS_CHANGED_EVENT = 'pdf-structured-extractor:ai-preferences:changed';
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const [verifyError, setVerifyError] = useState<string>('');
   const [verifyMessage, setVerifyMessage] = useState<string>('');
@@ -74,6 +75,7 @@ export const useAiPdfVerification = ({
   const aiNextPartIndexRef = useRef<number>(0);
   const currentAiLogIdRef = useRef<string | null>(null);
   const lastHydratedSessionIdRef = useRef<string | null>(null);
+  const skipPrefsWriteRef = useRef<boolean>(false);
 
   const aiPersistence = useAiAnalysisPersistence();
   const hydratedAiSession = aiPersistence.hydrated;
@@ -87,14 +89,14 @@ export const useAiPdfVerification = ({
   useEffect(() => {
     const initialModels = settingsDb.getAiModels();
     setModels(initialModels);
-    const readPrefs = () => {
+    const readPrefs = (): { provider: AiProviderId; modelId: string; customModel: string } | null => {
       try {
         const raw = localStorage.getItem(AI_PREFS_STORAGE_KEY);
         if (!raw) return null;
         const parsed = JSON.parse(raw) as unknown;
         if (!parsed || typeof parsed !== 'object') return null;
         const p = parsed as { provider?: unknown; modelId?: unknown; customModel?: unknown };
-        const provider = p.provider === 'gemini' || p.provider === 'kimi' ? p.provider : null;
+        const provider = p.provider === 'gemini' || p.provider === 'kimi' ? (p.provider as AiProviderId) : null;
         if (!provider) return null;
         return {
           provider,
@@ -134,6 +136,10 @@ export const useAiPdfVerification = ({
 
   useEffect(() => {
     try {
+      if (skipPrefsWriteRef.current) {
+        skipPrefsWriteRef.current = false;
+        return;
+      }
       localStorage.setItem(
         AI_PREFS_STORAGE_KEY,
         JSON.stringify({ provider: selectedProvider, modelId: selectedModelId, customModel }),
@@ -142,6 +148,48 @@ export const useAiPdfVerification = ({
       return;
     }
   }, [AI_PREFS_STORAGE_KEY, customModel, selectedModelId, selectedProvider]);
+
+  useEffect(() => {
+    if (models.length === 0) return;
+
+    const resolveDefaultModelId = (provider: AiProviderId) => {
+      if (provider === 'gemini') {
+        const preferred = models.find((m) => m.provider === 'gemini' && m.id === 'gemini-2.5-pro');
+        if (preferred) return preferred.id;
+      }
+      const firstForProvider = models.find((m) => m.provider === provider);
+      if (firstForProvider) return firstForProvider.id;
+      return models[0]?.id ?? '';
+    };
+
+    const applyPrefsFromStorage = () => {
+      try {
+        const raw = localStorage.getItem(AI_PREFS_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== 'object') return;
+        const p = parsed as { provider?: unknown; modelId?: unknown; customModel?: unknown };
+        const nextProvider = p.provider === 'gemini' || p.provider === 'kimi' ? p.provider : null;
+        if (!nextProvider) return;
+
+        const requestedModelId = typeof p.modelId === 'string' ? p.modelId : '';
+        const resolvedModelId =
+          requestedModelId && models.some((m) => m.provider === nextProvider && m.id === requestedModelId)
+            ? requestedModelId
+            : resolveDefaultModelId(nextProvider);
+
+        setSelectedProvider(nextProvider);
+        setSelectedModelId(resolvedModelId);
+        setCustomModel(typeof p.customModel === 'string' ? p.customModel : '');
+      } catch {
+        return;
+      }
+    };
+
+    const handler = () => applyPrefsFromStorage();
+    window.addEventListener(AI_PREFS_CHANGED_EVENT, handler);
+    return () => window.removeEventListener(AI_PREFS_CHANGED_EVENT, handler);
+  }, [AI_PREFS_CHANGED_EVENT, AI_PREFS_STORAGE_KEY, models]);
 
   useEffect(() => {
     if (models.length === 0) {
@@ -227,8 +275,11 @@ export const useAiPdfVerification = ({
     if (lastHydratedSessionIdRef.current === sessionId) return;
     lastHydratedSessionIdRef.current = sessionId;
 
-    setSelectedProvider(hydratedAiSession.meta.provider);
-    setCustomModel(hydratedAiSession.meta.model);
+    if (hydratedAiSession.meta.status !== 'completed') {
+      skipPrefsWriteRef.current = true;
+      setSelectedProvider(hydratedAiSession.meta.provider);
+      setCustomModel(hydratedAiSession.meta.model);
+    }
 
     const restoredRows = hydratedAiSession.parts.flatMap(p => p.rows);
     const restoredHeaders =

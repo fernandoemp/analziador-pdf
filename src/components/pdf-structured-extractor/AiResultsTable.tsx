@@ -90,6 +90,12 @@ export const AiResultsTable: React.FC<Props> = ({
 }) => {
   const hasHeaders = aiHeaders.length > 0;
   const selectedDatesCount = selectedDatesSet.size;
+  const DESC_HISTORY_STORAGE_KEY = 'pdf-structured-extractor:ai-desc-filter-history:v1';
+  const DESC_HISTORY_LIMIT = 15;
+  const [descSearchHistory, setDescSearchHistory] = React.useState<string[]>([]);
+  const [isDescHistoryOpen, setIsDescHistoryOpen] = React.useState<boolean>(false);
+  const descHistoryWrapRef = React.useRef<HTMLDivElement | null>(null);
+  const lastCommittedDescQueryRef = React.useRef<string>('');
 
   const totalsRow = React.useMemo(() => {
     if (!hasActiveFilters || visibleRowIndices.length === 0 || aiHeaders.length === 0) return null;
@@ -270,6 +276,86 @@ export const AiResultsTable: React.FC<Props> = ({
     return { rowCount: visibleRowIndices.length, formattedByColIndex };
   }, [aiHeaders, aiRows, hasActiveFilters, visibleRowIndices]);
 
+  const loadDescSearchHistory = (): string[] => {
+    try {
+      const raw = localStorage.getItem(DESC_HISTORY_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map(v => (typeof v === 'string' ? v.trim() : ''))
+        .filter(Boolean)
+        .slice(0, DESC_HISTORY_LIMIT);
+    } catch {
+      return [];
+    }
+  };
+
+  const saveDescSearchHistory = React.useCallback((next: string[]) => {
+    try {
+      localStorage.setItem(DESC_HISTORY_STORAGE_KEY, JSON.stringify(next.slice(0, DESC_HISTORY_LIMIT)));
+    } catch {
+      return;
+    }
+  }, [DESC_HISTORY_LIMIT, DESC_HISTORY_STORAGE_KEY]);
+
+  const commitDescQueryToHistory = React.useCallback((rawValue: string) => {
+    const q = (rawValue || '').trim();
+    if (!q) return;
+    if (q === lastCommittedDescQueryRef.current) return;
+    lastCommittedDescQueryRef.current = q;
+    const qNorm = q.toLowerCase();
+    setDescSearchHistory((prev) => {
+      const without = prev.filter(h => h.trim().toLowerCase() !== qNorm);
+      const next = [q, ...without].slice(0, DESC_HISTORY_LIMIT);
+      saveDescSearchHistory(next);
+      return next;
+    });
+  }, [DESC_HISTORY_LIMIT, saveDescSearchHistory]);
+
+  const removeDescQueryFromHistory = React.useCallback((query: string) => {
+    const targetNorm = (query || '').trim().toLowerCase();
+    setDescSearchHistory((prev) => {
+      const next = prev.filter(h => h.trim().toLowerCase() !== targetNorm);
+      saveDescSearchHistory(next);
+      return next;
+    });
+  }, [saveDescSearchHistory]);
+
+  const filteredDescHistory = React.useMemo(() => {
+    const needle = (descriptionFilter || '').trim().toLowerCase();
+    if (!needle) return descSearchHistory;
+    return descSearchHistory.filter(h => h.toLowerCase().includes(needle));
+  }, [descSearchHistory, descriptionFilter]);
+
+  React.useEffect(() => {
+    const initial = loadDescSearchHistory();
+    setDescSearchHistory(initial);
+  }, []);
+
+  React.useEffect(() => {
+    if (!showDescriptionFilter) return;
+    const q = (descriptionFilter || '').trim();
+    if (!q) return;
+    const handle = window.setTimeout(() => {
+      commitDescQueryToHistory(q);
+    }, 2000);
+    return () => window.clearTimeout(handle);
+  }, [commitDescQueryToHistory, descriptionFilter, showDescriptionFilter]);
+
+  React.useEffect(() => {
+    if (!isDescHistoryOpen) return;
+    const handler = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      const wrap = descHistoryWrapRef.current;
+      if (wrap && wrap.contains(target)) return;
+      setIsDescHistoryOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [isDescHistoryOpen]);
+
   if (!hasHeaders) return null;
 
   return (
@@ -397,18 +483,92 @@ export const AiResultsTable: React.FC<Props> = ({
                     Mostrando {visibleRowIndices.length} de {aiRows.length}
                   </div>
                 </div>
-                <Input
-                  id="ai-desc-filter"
-                  value={descriptionFilter}
-                  onChange={e => onChangeDescriptionFilter(e.target.value)}
-                  placeholder="Buscar (coincidencias parciales)…"
-                  aria-label="Buscar por descripción"
-                />
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs text-muted-foreground">
-                    {descriptionColIndex === null ? 'No se detectó columna de descripción; se busca en toda la fila.' : ''}
+                <div className="flex items-center gap-2">
+                  <div ref={descHistoryWrapRef} className="relative flex-1 min-w-0">
+                    <Input
+                      id="ai-desc-filter"
+                      value={descriptionFilter}
+                      onFocus={() => {
+                        if (descSearchHistory.length > 0) setIsDescHistoryOpen(true);
+                      }}
+                      onBlur={() => {
+                        commitDescQueryToHistory(descriptionFilter);
+                        setIsDescHistoryOpen(false);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          commitDescQueryToHistory(descriptionFilter);
+                          setIsDescHistoryOpen(false);
+                        }
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          setIsDescHistoryOpen(false);
+                        }
+                      }}
+                      onChange={e => {
+                        onChangeDescriptionFilter(e.target.value);
+                        if (descSearchHistory.length > 0) setIsDescHistoryOpen(true);
+                      }}
+                      placeholder="Buscar (coincidencias parciales)…"
+                      aria-label="Buscar por descripción"
+                      aria-expanded={isDescHistoryOpen && filteredDescHistory.length > 0}
+                      aria-controls="ai-desc-filter-history"
+                      autoComplete="off"
+                    />
+                    {isDescHistoryOpen && filteredDescHistory.length > 0 && (
+                      <div
+                        id="ai-desc-filter-history"
+                        role="listbox"
+                        className="absolute left-0 right-0 top-full mt-1 z-20 rounded-md border bg-background p-2 shadow-md"
+                        onMouseDown={(e) => e.preventDefault()}
+                      >
+                        <div className="flex flex-wrap gap-2">
+                          {filteredDescHistory.slice(0, DESC_HISTORY_LIMIT).map((query) => (
+                            <div
+                              key={query}
+                              role="option"
+                              aria-selected={descriptionFilter.trim() === query.trim()}
+                              className="inline-flex items-center gap-1 rounded-full border bg-muted px-2 py-1 text-xs"
+                            >
+                              <button
+                                type="button"
+                                className="max-w-[240px] truncate text-left"
+                                onClick={() => {
+                                  onChangeDescriptionFilter(query);
+                                  commitDescQueryToHistory(query);
+                                  setIsDescHistoryOpen(false);
+                                }}
+                                aria-label={`Usar búsqueda: ${query}`}
+                              >
+                                {query}
+                              </button>
+                              <button
+                                type="button"
+                                className="inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-background/50"
+                                onClick={() => removeDescQueryFromHistory(query)}
+                                aria-label={`Eliminar búsqueda: ${query}`}
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <Button type="button" variant="outline" size="sm" onClick={onClearFilters} disabled={!hasActiveFilters}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      onClearFilters();
+                      setIsDescHistoryOpen(false);
+                    }}
+                    disabled={!hasActiveFilters}
+                    className="h-9 shrink-0"
+                  >
                     Limpiar filtros
                   </Button>
                 </div>
@@ -608,7 +768,7 @@ export const AiResultsTable: React.FC<Props> = ({
       </div>
 
       {showPagination && !hasActiveFilters && aiRows.length > 0 && totalPages > 1 && (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-2 text-xs text-muted-foreground p-3 border-t">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center justify-center sm:gap-2 text-xs text-muted-foreground p-3 border-t">
           <span>
             Página {safeCurrentPage} de {totalPages}
           </span>
