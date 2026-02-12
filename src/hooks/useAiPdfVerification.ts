@@ -1336,6 +1336,7 @@ export const useAiPdfVerification = ({
     headerCandidate,
     confirmedHeaders,
     headerDraft,
+    setHeaderDraft,
     deleteColumnIndex,
     showDeleteColumnModal,
     selectedDates,

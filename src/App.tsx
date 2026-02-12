@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
 import PdfExtract from "./pages/PdfExtract";
+import BankReconciliation from "./pages/BankReconciliation";
 import Login from "./pages/Login";
 import Navbar from "./components/layout/Navbar";
 
@@ -70,6 +71,14 @@ const AppShell = () => {
           element={
             <RequireAuth>
               <PdfExtract />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/conciliacion-bancaria"
+          element={
+            <RequireAuth>
+              <BankReconciliation />
             </RequireAuth>
           }
         />
