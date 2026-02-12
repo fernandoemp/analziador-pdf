@@ -11,8 +11,8 @@
 - Evitar acoplamiento innecesario: dependencias explícitas; no acceder a globales desde utilidades salvo necesidad.
 
 ## Tamaño y estructura
-- Archivos “orquestadores” (pantallas/containers) deben mantenerse pequeños: ideal < 500 líneas.
-- Subcomponentes/hook nuevos: ideal < 300–400 líneas.
+- Archivos “orquestadores” (pantallas/containers) deben mantenerse pequeños: ideal <= 300 líneas.
+- Subcomponentes/hook nuevos: ideal < 150–200 líneas.
 - Preferir editar archivos existentes antes de crear nuevos; crear archivos solo si reduce complejidad o evita duplicación.
 
 ## TypeScript y React

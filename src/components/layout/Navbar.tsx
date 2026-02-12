@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LocalStorageMonitor } from '@/components/pdf-structured-extractor/LocalStorageMonitor';
 import GeminiApiKeyConfig from '@/components/GeminiApiKeyConfig';
 import { settingsDb, type AiProviderId } from '@/lib/localDb';
@@ -73,6 +74,7 @@ function resolveDefaultModelId(models: Array<{ id: string; provider: AiProviderI
 
 const Navbar: React.FC<Props> = ({ authStorageKey }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   const email = getSessionEmail(authStorageKey);
   const [openSettings, setOpenSettings] = useState(false);
 
@@ -120,6 +122,8 @@ const Navbar: React.FC<Props> = ({ authStorageKey }) => {
     navigate("/login", { replace: true });
   };
 
+  const tabsValue = location.pathname.startsWith('/conciliacion-bancaria') ? 'reconciliation' : 'pdf';
+
   return (
     <nav className="bg-primary text-primary-foreground p-4 shadow-md">
       <div className="container mx-auto flex justify-between items-center gap-4">
@@ -140,6 +144,29 @@ const Navbar: React.FC<Props> = ({ authStorageKey }) => {
             Logout
           </Button>
         </div>
+      </div>
+      <div className="container mx-auto mt-3 flex justify-center">
+        <Tabs
+          value={tabsValue}
+          onValueChange={(value) => {
+            navigate(value === 'pdf' ? '/pdf-extract' : '/conciliacion-bancaria');
+          }}
+        >
+          <TabsList className="bg-primary-foreground/10 text-primary-foreground">
+            <TabsTrigger
+              value="pdf"
+              className="data-[state=active]:bg-primary-foreground data-[state=active]:text-primary"
+            >
+              PDF Extractor
+            </TabsTrigger>
+            <TabsTrigger
+              value="reconciliation"
+              className="data-[state=active]:bg-primary-foreground data-[state=active]:text-primary"
+            >
+              Conciliación Bancaria
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
       <Dialog open={openSettings} onOpenChange={setOpenSettings}>
         <DialogContent className="max-w-2xl w-[calc(100%-2rem)] max-h-[85vh] overflow-y-auto">
