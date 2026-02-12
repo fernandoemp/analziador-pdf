@@ -35,7 +35,7 @@ export function Step2BankHeaders({
   onDetectHeaders: () => void;
   onBack: () => void;
 }) {
-  const headerCandidate = ai.headerDraft || ai.headerCandidate || ai.confirmedHeaders;
+  const headerCandidate = activePdfRole === 'bank' ? ai.headerDraft || ai.headerCandidate || ai.confirmedHeaders : null;
   const detectLabel = ai.isAnalyzing
     ? 'Analizando...'
     : ai.confirmedHeaders

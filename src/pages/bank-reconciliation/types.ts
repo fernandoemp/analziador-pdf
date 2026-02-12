@@ -22,13 +22,6 @@ export type ReconciliationState = {
   onlyLedger: number[];
 };
 
-export type KeyFieldSelection = {
-  dateColumn: string;
-  debitColumn: string;
-  creditColumn: string;
-  descriptionColumn: string;
-};
-
 export type FieldMapping = {
   bankDate: string;
   ledgerDate: string;

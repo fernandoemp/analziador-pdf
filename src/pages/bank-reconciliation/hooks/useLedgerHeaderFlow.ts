@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { showError } from '@/utils/toast';
-import { defaultKeySelection, findHeaderRowIndex } from '../utils/headerUtils';
+import { findHeaderRowIndex } from '../utils/headerUtils';
 import { parseCSVRows, parseExcelRows, type LedgerFormat } from '../utils/fileParsers';
 
 export const useLedgerHeaderFlow = ({
@@ -13,8 +13,9 @@ export const useLedgerHeaderFlow = ({
   ledgerHeaderDraft,
   setLedgerHeaderDraft,
   setLedgerPreviewRows,
-  ledgerKeyFields,
-  setLedgerKeyFields,
+  setLedgerSampleRows,
+  ledgerHeaderRowIndex,
+  setLedgerHeaderRowIndex,
   setLedgerHeaders,
   setLedgerRows,
   setStep,
@@ -35,18 +36,45 @@ export const useLedgerHeaderFlow = ({
   ledgerHeaderDraft: string[];
   setLedgerHeaderDraft: (headers: string[]) => void;
   setLedgerPreviewRows: (rows: string[][]) => void;
-  ledgerKeyFields: { dateColumn: string; debitColumn: string; creditColumn: string; descriptionColumn: string };
-  setLedgerKeyFields: (value: { dateColumn: string; debitColumn: string; creditColumn: string; descriptionColumn: string }) => void;
+  setLedgerSampleRows: (rows: string[][]) => void;
+  ledgerHeaderRowIndex: number;
+  setLedgerHeaderRowIndex: (index: number) => void;
   setLedgerHeaders: (headers: string[]) => void;
   setLedgerRows: (rows: string[][]) => void;
   setStep: (step: number) => void;
 }) => {
   const pendingManualDetection = useRef(false);
   const lastLedgerFingerprint = useRef<string | null>(null);
+  const rawLedgerRowsRef = useRef<string[][] | null>(null);
+  const prevStepRef = useRef<number>(step);
+
+  useEffect(() => {
+    const prev = prevStepRef.current;
+    prevStepRef.current = step;
+    if (step !== 4) return;
+    if (prev === 3 && ledgerFormat !== 'pdf') {
+      setLedgerHeaderDraft([]);
+      setLedgerPreviewRows([]);
+    }
+  }, [ledgerFormat, setLedgerHeaderDraft, setLedgerPreviewRows, step]);
 
   useEffect(() => {
     lastLedgerFingerprint.current = null;
-  }, [ledgerFile, ledgerFormat]);
+    rawLedgerRowsRef.current = null;
+    if (ledgerFormat !== 'pdf') {
+      setLedgerSampleRows([]);
+      setLedgerHeaderRowIndex(0);
+      setLedgerPreviewRows([]);
+      setLedgerHeaderDraft([]);
+    }
+  }, [
+    ledgerFile,
+    ledgerFormat,
+    setLedgerHeaderDraft,
+    setLedgerHeaderRowIndex,
+    setLedgerPreviewRows,
+    setLedgerSampleRows,
+  ]);
 
   useEffect(() => {
     if (step !== 4) return;
@@ -72,12 +100,10 @@ export const useLedgerHeaderFlow = ({
           showError('No se encontraron filas en el libro contable.');
           return;
         }
-        const headerIndex = findHeaderRowIndex(rows);
-        const headers = rows[headerIndex].map(cell => String(cell ?? '').trim());
-        const dataRows = rows.slice(headerIndex + 1);
-        setLedgerHeaderDraft(headers);
-        setLedgerPreviewRows(dataRows.slice(0, 5));
-        setLedgerKeyFields(defaultKeySelection(headers));
+        rawLedgerRowsRef.current = rows;
+        const sample = rows.slice(0, 30);
+        setLedgerSampleRows(sample);
+        setLedgerHeaderRowIndex(findHeaderRowIndex(sample));
       } catch (error) {
         showError(error instanceof Error ? error.message : 'Error al leer el libro contable.');
       }
@@ -90,8 +116,9 @@ export const useLedgerHeaderFlow = ({
     ledgerFormat,
     setActivePdfRole,
     setLedgerHeaderDraft,
-    setLedgerKeyFields,
+    setLedgerHeaderRowIndex,
     setLedgerPreviewRows,
+    setLedgerSampleRows,
     step,
   ]);
 
@@ -110,25 +137,8 @@ export const useLedgerHeaderFlow = ({
     if (ledgerFormat === 'pdf' && activePdfRole === 'ledger' && ai.aiHeaders.length > 0 && ai.aiRows.length > 0) {
       setLedgerHeaders(ai.aiHeaders);
       setLedgerRows(ai.aiRows);
-      const defaults = defaultKeySelection(ai.aiHeaders);
-      setLedgerKeyFields({
-        dateColumn: ledgerKeyFields.dateColumn || defaults.dateColumn,
-        debitColumn: ledgerKeyFields.debitColumn || defaults.debitColumn,
-        creditColumn: ledgerKeyFields.creditColumn || defaults.creditColumn,
-        descriptionColumn: ledgerKeyFields.descriptionColumn || defaults.descriptionColumn,
-      });
     }
-  }, [
-    activePdfRole,
-    ai.aiHeaders,
-    ai.aiRows,
-    ledgerFormat,
-    ledgerKeyFields,
-    setLedgerHeaders,
-    setLedgerKeyFields,
-    setLedgerRows,
-    step,
-  ]);
+  }, [activePdfRole, ai.aiHeaders, ai.aiRows, ledgerFormat, setLedgerHeaders, setLedgerRows, step]);
 
   const handleConfirmLedgerHeaders = async () => {
     if (ledgerFormat === 'pdf') {
@@ -149,12 +159,49 @@ export const useLedgerHeaderFlow = ({
         showError('No se encontraron filas en el libro contable.');
         return;
       }
-      const headerIndex = findHeaderRowIndex(rows);
+      const headerIndex = ledgerHeaderDraft.length > 0 ? ledgerHeaderRowIndex : findHeaderRowIndex(rows);
       const headers = ledgerHeaderDraft.length > 0 ? ledgerHeaderDraft : rows[headerIndex].map(cell => String(cell ?? '').trim());
       const dataRows = rows.slice(headerIndex + 1).map(row => headers.map((_, idx) => String(row[idx] ?? '')));
       setLedgerHeaders(headers);
       setLedgerRows(dataRows);
-      setLedgerKeyFields(defaultKeySelection(headers));
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Error al leer el libro contable.');
+    }
+  };
+
+  const handleDetectLedgerHeadersLocal = async () => {
+    if (!ledgerFile) return;
+    if (ledgerFormat === 'pdf') return;
+    try {
+      const rows =
+        rawLedgerRowsRef.current || (ledgerFormat === 'excel' ? await parseExcelRows(ledgerFile) : await parseCSVRows(ledgerFile));
+      rawLedgerRowsRef.current = rows;
+      if (rows.length === 0) {
+        showError('No se encontraron filas en el libro contable.');
+        return;
+      }
+      const maxRows = Math.min(rows.length, 25);
+      let headerIndex = -1;
+      let bestScore = -Infinity;
+      for (let i = 0; i < maxRows; i++) {
+        const row = rows[i] || [];
+        const trimmed = row.map(cell => String(cell ?? '').trim());
+        const textCount = trimmed.filter(cell => cell && isNaN(Number(cell.replace(/[^\d.-]/g, '')))).length;
+        const numericCount = trimmed.filter(cell => cell && !isNaN(Number(cell.replace(/[^\d.-]/g, '')))).length;
+        const score = textCount * 2 - numericCount;
+        if (textCount >= 2 && score > bestScore) {
+          bestScore = score;
+          headerIndex = i;
+        }
+      }
+      if (headerIndex === -1) {
+        headerIndex = findHeaderRowIndex(rows);
+      }
+      const headers = rows[headerIndex].map(cell => String(cell ?? '').trim());
+      const dataRows = rows.slice(headerIndex + 1);
+      setLedgerHeaderDraft(headers);
+      setLedgerPreviewRows(dataRows.slice(0, 5));
+      setLedgerHeaderRowIndex(headerIndex);
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Error al leer el libro contable.');
     }
@@ -173,5 +220,5 @@ export const useLedgerHeaderFlow = ({
     ai.handleAnalyzeWithAI().catch(() => {});
   };
 
-  return { handleConfirmLedgerHeaders, handleLoadLedgerRows, handleDetectLedgerHeaders };
+  return { handleConfirmLedgerHeaders, handleLoadLedgerRows, handleDetectLedgerHeaders, handleDetectLedgerHeadersLocal };
 };

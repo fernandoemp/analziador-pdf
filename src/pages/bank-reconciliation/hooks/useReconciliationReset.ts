@@ -10,10 +10,10 @@ export const useReconciliationReset = ({
   setLedgerRows,
   setLedgerHeaderDraft,
   setLedgerPreviewRows,
-  setLedgerKeyFields,
+  setLedgerSampleRows,
+  setLedgerHeaderRowIndex,
   setFieldMapping,
   setReconciliation,
-  setValidatorProgress,
   setActivePdfRole,
   bankPdfUrl,
   ledgerPdfUrl,
@@ -29,10 +29,10 @@ export const useReconciliationReset = ({
   setLedgerRows: (rows: string[][]) => void;
   setLedgerHeaderDraft: (headers: string[]) => void;
   setLedgerPreviewRows: (rows: string[][]) => void;
-  setLedgerKeyFields: (value: { dateColumn: string; debitColumn: string; creditColumn: string; descriptionColumn: string }) => void;
+  setLedgerSampleRows: (rows: string[][]) => void;
+  setLedgerHeaderRowIndex: (index: number) => void;
   setFieldMapping: (value: FieldMapping) => void;
   setReconciliation: (value: ReconciliationState) => void;
-  setValidatorProgress: (value: { validated: number; total: number } | null) => void;
   setActivePdfRole: (value: 'bank' | 'ledger' | null) => void;
   bankPdfUrl: string | null;
   ledgerPdfUrl: string | null;
@@ -49,7 +49,8 @@ export const useReconciliationReset = ({
     setLedgerRows([]);
     setLedgerHeaderDraft([]);
     setLedgerPreviewRows([]);
-    setLedgerKeyFields({ dateColumn: '', debitColumn: '', creditColumn: '', descriptionColumn: '' });
+    setLedgerSampleRows([]);
+    setLedgerHeaderRowIndex(0);
     setFieldMapping({
       bankDate: '',
       ledgerDate: '',
@@ -61,7 +62,6 @@ export const useReconciliationReset = ({
       ledgerDescription: '',
     });
     setReconciliation({ matches: [], discrepancies: [], onlyBank: [], onlyLedger: [] });
-    setValidatorProgress(null);
     setActivePdfRole(null);
     if (bankPdfUrl) URL.revokeObjectURL(bankPdfUrl);
     if (ledgerPdfUrl) URL.revokeObjectURL(ledgerPdfUrl);

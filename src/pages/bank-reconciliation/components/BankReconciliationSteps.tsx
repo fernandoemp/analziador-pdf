@@ -16,7 +16,6 @@ export const BankReconciliationSteps = ({ state }: { state: BankReconciliationSt
     setBankFile,
     ledgerFile,
     setLedgerFile,
-    bankPdfUrl,
     bankHeaders,
     bankRows,
     setBankHeaders,
@@ -26,8 +25,6 @@ export const BankReconciliationSteps = ({ state }: { state: BankReconciliationSt
     ledgerHeaderDraft,
     setLedgerHeaderDraft,
     ledgerPreviewRows,
-    ledgerKeyFields,
-    setLedgerKeyFields,
     fieldMapping,
     setFieldMapping,
     selectedBank,
@@ -47,7 +44,6 @@ export const BankReconciliationSteps = ({ state }: { state: BankReconciliationSt
     isReconciling,
     reconciliation,
     setReconciliation,
-    validatorProgress,
     activePdfRole,
     ai,
     ledgerFormat,
@@ -62,8 +58,8 @@ export const BankReconciliationSteps = ({ state }: { state: BankReconciliationSt
     handleConfirmLedgerHeaders,
     handleLoadLedgerRows,
     handleDetectLedgerHeaders,
+    handleDetectLedgerHeadersLocal,
     handleExecuteReconciliation,
-    handleSaveSession,
     handleExportExcel,
     handleExportPdf,
     handleReset,
@@ -121,15 +117,14 @@ export const BankReconciliationSteps = ({ state }: { state: BankReconciliationSt
           activePdfRole={activePdfRole}
           ledgerHeaderDraft={ledgerHeaderDraft}
           ledgerPreviewRows={ledgerPreviewRows}
-          ledgerKeyFields={ledgerKeyFields}
           onChangeHeader={(index, value) =>
             setLedgerHeaderDraft(prev => prev.map((item, i) => (i === index ? value : item)))
           }
           onRemoveHeader={(index) => setLedgerHeaderDraft(prev => prev.filter((_, i) => i !== index))}
           onAddHeader={() => setLedgerHeaderDraft(prev => [...prev, ''])}
-          onChangeKeyFields={setLedgerKeyFields}
           onConfirm={handleConfirmLedgerHeaders}
           onDetectHeaders={handleDetectLedgerHeaders}
+          onDetectLocalHeaders={handleDetectLedgerHeadersLocal}
           onBack={() => setStep(3)}
         />
       )}
@@ -185,14 +180,10 @@ export const BankReconciliationSteps = ({ state }: { state: BankReconciliationSt
               discrepancies: prev.discrepancies.filter(m => m.id !== matchId),
             }))
           }
-          onSaveSession={handleSaveSession}
-          onShowValidator={() => state.setShowValidator(true)}
-          canShowValidator={!!bankPdfUrl}
-          onShowManualMatch={() => state.setShowManualMatch(true)}
+          onBackToConfig={() => setStep(6)}
           onExportExcel={handleExportExcel}
           onExportPdf={handleExportPdf}
           onReset={handleReset}
-          validatorProgress={validatorProgress}
         />
       )}
     </>

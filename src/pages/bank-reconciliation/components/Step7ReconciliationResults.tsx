@@ -14,14 +14,10 @@ export function Step7ReconciliationResults({
   fieldMapping,
   onToggleMatchVerified,
   onAcceptDiscrepancy,
-  onSaveSession,
-  onShowValidator,
-  canShowValidator,
-  onShowManualMatch,
+  onBackToConfig,
   onExportExcel,
   onExportPdf,
   onReset,
-  validatorProgress,
 }: {
   reconciliation: ReconciliationState;
   stats: ReconciliationStatsType;
@@ -33,15 +29,18 @@ export function Step7ReconciliationResults({
   fieldMapping: FieldMapping;
   onToggleMatchVerified: (matchId: string, checked: boolean) => void;
   onAcceptDiscrepancy: (matchId: string) => void;
-  onSaveSession: () => void;
-  onShowValidator: () => void;
-  canShowValidator: boolean;
-  onShowManualMatch: () => void;
+  onBackToConfig: () => void;
   onExportExcel: () => void;
   onExportPdf: () => void;
   onReset: () => void;
-  validatorProgress: { validated: number; total: number } | null;
 }) {
+  const hasResults =
+    reconciliation.matches.length +
+      reconciliation.discrepancies.length +
+      reconciliation.onlyBank.length +
+      reconciliation.onlyLedger.length >
+    0;
+
   return (
     <div className="space-y-6">
       <ReconciliationStats stats={stats} isReconciling={isReconciling} />
@@ -60,14 +59,11 @@ export function Step7ReconciliationResults({
         </div>
         <div className="space-y-4">
           <ReconciliationActions
-            onSaveSession={onSaveSession}
-            onShowValidator={onShowValidator}
-            canShowValidator={canShowValidator}
-            onShowManualMatch={onShowManualMatch}
+            onBackToConfig={onBackToConfig}
+            hasResults={hasResults}
             onExportExcel={onExportExcel}
             onExportPdf={onExportPdf}
             onReset={onReset}
-            validatorProgress={validatorProgress}
           />
         </div>
       </div>

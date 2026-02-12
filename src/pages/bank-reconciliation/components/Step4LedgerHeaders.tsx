@@ -1,13 +1,11 @@
+import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { AiHeaderCandidateEditor } from '@/components/pdf-structured-extractor/AiHeaderCandidateEditor';
 import { useAiPdfVerification } from '@/hooks/useAiPdfVerification';
-import { type KeyFieldSelection } from '../types';
 
 export function Step4LedgerHeaders({
   ai,
@@ -16,13 +14,12 @@ export function Step4LedgerHeaders({
   activePdfRole,
   ledgerHeaderDraft,
   ledgerPreviewRows,
-  ledgerKeyFields,
   onChangeHeader,
   onRemoveHeader,
   onAddHeader,
-  onChangeKeyFields,
   onConfirm,
   onDetectHeaders,
+  onDetectLocalHeaders,
   onBack,
 }: {
   ai: ReturnType<typeof useAiPdfVerification>;
@@ -31,18 +28,19 @@ export function Step4LedgerHeaders({
   activePdfRole: 'bank' | 'ledger' | null;
   ledgerHeaderDraft: string[];
   ledgerPreviewRows: string[][];
-  ledgerKeyFields: KeyFieldSelection;
   onChangeHeader: (index: number, value: string) => void;
   onRemoveHeader: (index: number) => void;
   onAddHeader: () => void;
-  onChangeKeyFields: (value: KeyFieldSelection) => void;
   onConfirm: () => Promise<void>;
   onDetectHeaders: () => void;
+  onDetectLocalHeaders: () => Promise<void>;
   onBack: () => void;
 }) {
-  const headerCandidate = ledgerFormat === 'pdf' ? ai.headerDraft || ai.headerCandidate || ai.confirmedHeaders : ledgerHeaderDraft;
-  const headerDraft = ledgerFormat === 'pdf' ? ai.headerDraft : ledgerHeaderDraft;
-  const selectableHeaders = (headerCandidate || []).filter(header => header.trim() !== '');
+  const [isDetectingLocal, setIsDetectingLocal] = useState(false);
+  const pdfHeaderCandidate =
+    activePdfRole === 'ledger' ? ai.headerDraft || ai.headerCandidate || ai.confirmedHeaders : null;
+  const headerCandidate = ledgerFormat === 'pdf' ? pdfHeaderCandidate : ledgerHeaderDraft;
+  const headerDraft = ledgerFormat === 'pdf' && activePdfRole === 'ledger' ? ai.headerDraft : ledgerHeaderDraft;
   const canShowHeaders = headerCandidate && headerCandidate.length > 0;
   const detectLabel = ai.isAnalyzing
     ? 'Analizando...'
@@ -50,6 +48,8 @@ export function Step4LedgerHeaders({
       ? 'Analizar movimientos con IA'
       : 'Detectar encabezado con IA';
   const canDetectPdf = ledgerFormat === 'pdf' && !!ledgerFile && activePdfRole === 'ledger' && !ai.isAnalyzing;
+  const canDetectLocal = ledgerFormat !== 'pdf' && !!ledgerFile;
+  const hasLocalHeaders = ledgerFormat !== 'pdf' && ledgerHeaderDraft.some(h => h.trim() !== '');
 
   return (
     <div className="space-y-6">
@@ -96,123 +96,91 @@ export function Step4LedgerHeaders({
           )
         ) : (
           <div className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              {ledgerHeaderDraft.map((header, idx) => (
-                <div key={`${header}-${idx}`} className="flex items-center gap-2">
-                  <Input value={header} onChange={(e) => onChangeHeader(idx, e.target.value)} className="h-8 w-44" />
-                  <Button type="button" variant="ghost" size="sm" onClick={() => onRemoveHeader(idx)}>
-                    Quitar
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="w-fit"
+                onClick={async () => {
+                  setIsDetectingLocal(true);
+                  try {
+                    await onDetectLocalHeaders();
+                  } finally {
+                    setIsDetectingLocal(false);
+                  }
+                }}
+                disabled={!canDetectLocal || isDetectingLocal}
+              >
+                {isDetectingLocal
+                  ? 'Detectando...'
+                  : ledgerHeaderDraft.length > 0
+                    ? 'Volver a detectar encabezados'
+                    : 'Detectar encabezados'}
+              </Button>
+              {!hasLocalHeaders ? (
+                <div className="text-sm text-muted-foreground">
+                  Presiona “Detectar encabezados” para cargar el encabezado.
+                </div>
+              ) : null}
+            </div>
+
+            {hasLocalHeaders ? (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  {ledgerHeaderDraft.map((header, idx) => (
+                    <div key={`${header}-${idx}`} className="flex items-center gap-2">
+                      <Input value={header} onChange={(e) => onChangeHeader(idx, e.target.value)} className="h-8 w-44" />
+                      <Button type="button" variant="ghost" size="sm" onClick={() => onRemoveHeader(idx)}>
+                        Quitar
+                      </Button>
+                    </div>
+                  ))}
+                  <Button type="button" variant="outline" size="sm" onClick={onAddHeader}>
+                    Agregar columna
                   </Button>
                 </div>
-              ))}
-              <Button type="button" variant="outline" size="sm" onClick={onAddHeader}>
-                Agregar columna
-              </Button>
-            </div>
-            <div>
-              <div className="text-sm text-muted-foreground mb-2">Vista previa (primeras 5 filas)</div>
-              <div className="border rounded-md overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {ledgerHeaderDraft.map((header, idx) => (
-                        <TableHead key={`header-${idx}`}>{header || '-'}</TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {ledgerPreviewRows.map((row, idx) => (
-                      <TableRow key={`row-${idx}`}>
-                        {ledgerHeaderDraft.map((_, colIdx) => (
-                          <TableCell key={`cell-${idx}-${colIdx}`}>{row[colIdx] ?? ''}</TableCell>
+                <div>
+                  <div className="text-sm text-muted-foreground mb-2">Vista previa (primeras 5 filas)</div>
+                  <div className="border rounded-md overflow-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          {ledgerHeaderDraft.map((header, idx) => (
+                            <TableHead key={`header-${idx}`}>{header || '-'}</TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {ledgerPreviewRows.map((row, idx) => (
+                          <TableRow key={`row-${idx}`}>
+                            {ledgerHeaderDraft.map((_, colIdx) => (
+                              <TableCell key={`cell-${idx}-${colIdx}`}>{row[colIdx] ?? ''}</TableCell>
+                            ))}
+                          </TableRow>
                         ))}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </>
+            ) : null}
           </div>
         )}
 
-        {ai.verifyMessage ? <div className="text-sm text-green-600">{ai.verifyMessage}</div> : null}
-        {ai.verifyError ? <div className="text-sm text-destructive">{ai.verifyError}</div> : null}
-      </div>
-
-      <div className="border rounded-md p-4 space-y-4">
-        <div className="font-semibold">Identificación de Campos Clave</div>
-        <div className="grid gap-4 md:grid-cols-4">
-          <div>
-            <Label>Columna de Fecha</Label>
-            <Select value={ledgerKeyFields.dateColumn} onValueChange={(value) => onChangeKeyFields({ ...ledgerKeyFields, dateColumn: value })}>
-              <SelectTrigger className="mt-1">
-                <SelectValue placeholder="Selecciona columna" />
-              </SelectTrigger>
-              <SelectContent>
-                {selectableHeaders.map((header, idx) => (
-                  <SelectItem key={`date-${idx}`} value={header}>
-                    {header}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Columna de Debe</Label>
-            <Select value={ledgerKeyFields.debitColumn} onValueChange={(value) => onChangeKeyFields({ ...ledgerKeyFields, debitColumn: value })}>
-              <SelectTrigger className="mt-1">
-                <SelectValue placeholder="Selecciona columna" />
-              </SelectTrigger>
-              <SelectContent>
-                {selectableHeaders.map((header, idx) => (
-                  <SelectItem key={`debit-${idx}`} value={header}>
-                    {header}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Columna de Haber</Label>
-            <Select value={ledgerKeyFields.creditColumn} onValueChange={(value) => onChangeKeyFields({ ...ledgerKeyFields, creditColumn: value })}>
-              <SelectTrigger className="mt-1">
-                <SelectValue placeholder="Selecciona columna" />
-              </SelectTrigger>
-              <SelectContent>
-                {selectableHeaders.map((header, idx) => (
-                  <SelectItem key={`credit-${idx}`} value={header}>
-                    {header}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Columna de Descripción</Label>
-            <Select
-              value={ledgerKeyFields.descriptionColumn}
-              onValueChange={(value) => onChangeKeyFields({ ...ledgerKeyFields, descriptionColumn: value })}
-            >
-              <SelectTrigger className="mt-1">
-                <SelectValue placeholder="Selecciona columna" />
-              </SelectTrigger>
-              <SelectContent>
-                {selectableHeaders.map((header, idx) => (
-                  <SelectItem key={`desc-${idx}`} value={header}>
-                    {header}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+        {ledgerFormat === 'pdf' && activePdfRole === 'ledger' && ai.verifyMessage ? (
+          <div className="text-sm text-green-600">{ai.verifyMessage}</div>
+        ) : null}
+        {ledgerFormat === 'pdf' && activePdfRole === 'ledger' && ai.verifyError ? (
+          <div className="text-sm text-destructive">{ai.verifyError}</div>
+        ) : null}
       </div>
 
       <div className="flex justify-between">
         <Button type="button" variant="outline" onClick={onBack}>
           Regresar al extracto
         </Button>
-        <Button type="button" onClick={onConfirm}>
+        <Button type="button" onClick={onConfirm} disabled={ledgerFormat !== 'pdf' && !hasLocalHeaders}>
           Confirmar y Continuar
         </Button>
       </div>

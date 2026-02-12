@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { type AiResultsTableEditingCell } from '@/components/pdf-structured-extractor/AiResultsTable';
 import { findColumnByKeywords } from '../utils/headerUtils';
 import { normalizeText } from '../utils/textUtils';
@@ -52,6 +52,12 @@ export const useSimpleTable = ({
 
   const totalPages = Math.max(1, Math.ceil(filteredRowIndices.length / pageSize));
   const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  useEffect(() => {
+    if (currentPage !== safeCurrentPage) {
+      setCurrentPage(safeCurrentPage);
+    }
+  }, [currentPage, safeCurrentPage]);
 
   const visibleRowIndices = useMemo(() => {
     const start = (safeCurrentPage - 1) * pageSize;

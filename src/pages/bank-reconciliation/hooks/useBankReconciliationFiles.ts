@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useAiPdfVerification } from '@/hooks/useAiPdfVerification';
-import { getFileFingerprint, removeValidatorState } from '@/lib/ai-analysis-persistence/storage';
 import { detectLedgerFormat, type LedgerFormat } from '../utils/fileParsers';
 
 export const useBankReconciliationFiles = () => {
@@ -25,18 +24,6 @@ export const useBankReconciliationFiles = () => {
     onDrop: (files) => {
       const file = files[0];
       if (!file) return;
-      if (bankFile) {
-        const prev = getFileFingerprint(bankFile);
-        const next = getFileFingerprint(file);
-        if (
-          prev.name !== next.name ||
-          prev.size !== next.size ||
-          prev.lastModified !== next.lastModified ||
-          prev.type !== next.type
-        ) {
-          removeValidatorState(prev);
-        }
-      }
       if (bankPdfUrl) URL.revokeObjectURL(bankPdfUrl);
       setBankFile(file);
       setBankPdfUrl(URL.createObjectURL(file));

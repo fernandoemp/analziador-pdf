@@ -1,5 +1,4 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { BankReconciliationDialogs } from './BankReconciliationDialogs';
 import { BankReconciliationSteps } from './BankReconciliationSteps';
 import { type BankReconciliationState } from '../hooks/useBankReconciliationState';
 
@@ -17,7 +16,6 @@ export const BankReconciliationView = ({ state }: { state: BankReconciliationSta
           <BankReconciliationSteps state={state} />
         </CardContent>
       </Card>
-      <BankReconciliationDialogs state={state} />
     </div>
   );
 };

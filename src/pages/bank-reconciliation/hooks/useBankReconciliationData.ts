@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { type FieldMapping, type KeyFieldSelection, type ReconciliationState } from '../types';
+import { type FieldMapping, type ReconciliationState } from '../types';
 
 export const useBankReconciliationData = () => {
   const [bankHeaders, setBankHeaders] = useState<string[]>([]);
@@ -8,12 +8,8 @@ export const useBankReconciliationData = () => {
   const [ledgerRows, setLedgerRows] = useState<string[][]>([]);
   const [ledgerHeaderDraft, setLedgerHeaderDraft] = useState<string[]>([]);
   const [ledgerPreviewRows, setLedgerPreviewRows] = useState<string[][]>([]);
-  const [ledgerKeyFields, setLedgerKeyFields] = useState<KeyFieldSelection>({
-    dateColumn: '',
-    debitColumn: '',
-    creditColumn: '',
-    descriptionColumn: '',
-  });
+  const [ledgerSampleRows, setLedgerSampleRows] = useState<string[][]>([]);
+  const [ledgerHeaderRowIndex, setLedgerHeaderRowIndex] = useState<number>(0);
   const [fieldMapping, setFieldMapping] = useState<FieldMapping>({
     bankDate: '',
     ledgerDate: '',
@@ -44,8 +40,10 @@ export const useBankReconciliationData = () => {
     setLedgerHeaderDraft,
     ledgerPreviewRows,
     setLedgerPreviewRows,
-    ledgerKeyFields,
-    setLedgerKeyFields,
+    ledgerSampleRows,
+    setLedgerSampleRows,
+    ledgerHeaderRowIndex,
+    setLedgerHeaderRowIndex,
     fieldMapping,
     setFieldMapping,
     reconciliation,

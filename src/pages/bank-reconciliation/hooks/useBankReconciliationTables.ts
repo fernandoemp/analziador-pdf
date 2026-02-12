@@ -29,13 +29,5 @@ export const useBankReconciliationTables = ({
     pageSize: 25,
   });
 
-  const validatorTable = useSimpleTable({
-    headers: bankHeaders,
-    rows: bankRows,
-    setRows: setBankRows,
-    pageSize: 20,
-    showFilters: false,
-  });
-
-  return { bankTable, ledgerTable, validatorTable };
+  return { bankTable, ledgerTable };
 };

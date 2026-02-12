@@ -59,6 +59,8 @@ export const buildReconciliationState = ({
   useDescription: boolean;
   descriptionThreshold: number;
 }): ReconciliationState => {
+  const safeToleranceDays = Math.max(0, toleranceDays);
+  const safeToleranceAmountPercent = Math.max(0, toleranceAmountPercent);
   const bankDateIdx = bankHeaders.findIndex(h => h === fieldMapping.bankDate);
   const ledgerDateIdx = ledgerHeaders.findIndex(h => h === fieldMapping.ledgerDate);
   const bankAmountIdx = bankHeaders.findIndex(h => h === fieldMapping.bankAmount);
@@ -89,7 +91,10 @@ export const buildReconciliationState = ({
   const unmatchedLedger = new Set(ledgerEntries.map(e => e.index));
   const matches: ReconciliationMatch[] = [];
 
-  const amountTolerance = (amount: number) => Math.abs(amount) * (toleranceAmountPercent / 100);
+  const amountTolerance = (bankAmount: number, ledgerAmount: number) => {
+    const base = Math.max(Math.abs(bankAmount), Math.abs(ledgerAmount));
+    return base * (safeToleranceAmountPercent / 100);
+  };
 
   const tryMatch = (
     predicate: (bank: typeof bankEntries[number], ledger: typeof ledgerEntries[number]) => boolean,
@@ -129,7 +134,8 @@ export const buildReconciliationState = ({
     !!a && !!b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 
   tryMatch(
-    (bank, ledger) => isSameDay(bank.date, ledger.date) && Math.abs(bank.amount - ledger.amount) <= amountTolerance(bank.amount),
+    (bank, ledger) =>
+      isSameDay(bank.date, ledger.date) && Math.abs(bank.amount - ledger.amount) <= amountTolerance(bank.amount, ledger.amount),
     100,
     'exact',
   );
@@ -138,8 +144,8 @@ export const buildReconciliationState = ({
     (bank, ledger) =>
       !!bank.date &&
       !!ledger.date &&
-      Math.abs(bank.amount - ledger.amount) <= amountTolerance(bank.amount) &&
-      Math.abs(bank.date.getTime() - ledger.date.getTime()) / (1000 * 60 * 60 * 24) <= toleranceDays,
+      Math.abs(bank.amount - ledger.amount) <= amountTolerance(bank.amount, ledger.amount) &&
+      Math.abs(bank.date.getTime() - ledger.date.getTime()) / (1000 * 60 * 60 * 24) <= safeToleranceDays,
     80,
     'date_flexible',
   );
@@ -147,7 +153,7 @@ export const buildReconciliationState = ({
   if (useDescription) {
     tryMatch(
       (bank, ledger) =>
-        Math.abs(bank.amount - ledger.amount) <= amountTolerance(bank.amount) &&
+        Math.abs(bank.amount - ledger.amount) <= amountTolerance(bank.amount, ledger.amount) &&
         textSimilarity(bank.description, ledger.description) * 100 >= descriptionThreshold,
       60,
       'description',
@@ -156,8 +162,10 @@ export const buildReconciliationState = ({
 
   const discrepancies = matches.filter(match => {
     if (match.type === 'exact') return false;
-    if (match.amountDiff > 0 && match.amountDiff <= amountTolerance(bankEntries[match.bankIndex]?.amount ?? 0)) return true;
-    if (match.dateDiffDays > 0 && match.dateDiffDays <= toleranceDays) return true;
+    const bankAmount = bankEntries[match.bankIndex]?.amount ?? 0;
+    const ledgerAmount = ledgerEntries[match.ledgerIndex]?.amount ?? 0;
+    if (match.amountDiff > 0 && match.amountDiff <= amountTolerance(bankAmount, ledgerAmount)) return true;
+    if (match.dateDiffDays > 0 && match.dateDiffDays <= safeToleranceDays) return true;
     return false;
   });
 
