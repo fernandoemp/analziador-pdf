@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LocalStorageMonitor } from '@/components/pdf-structured-extractor/LocalStorageMonitor';
 import GeminiApiKeyConfig from '@/components/GeminiApiKeyConfig';
 import { settingsDb, type AiProviderId } from '@/lib/localDb';
+import { showSuccess } from '@/utils/toast';
 import { LogOut, Settings } from 'lucide-react';
 
 type Props = {
@@ -83,6 +84,15 @@ const Navbar: React.FC<Props> = ({ authStorageKey }) => {
   const [modelId, setModelId] = useState<string>('');
   const [customModel, setCustomModel] = useState<string>('');
 
+  const saveAiPrefs = (next: { provider: AiProviderId; modelId: string; customModel: string }) => {
+    try {
+      localStorage.setItem(AI_PREFS_STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new Event(AI_PREFS_CHANGED_EVENT));
+    } catch {
+      return;
+    }
+  };
+
   useEffect(() => {
     const prefs = readAiPrefs();
     const initialProvider = prefs?.provider ?? 'gemini';
@@ -91,23 +101,29 @@ const Navbar: React.FC<Props> = ({ authStorageKey }) => {
       models.some((m) => m.provider === initialProvider && m.id === initialModelId)
         ? initialModelId
         : resolveDefaultModelId(models, initialProvider);
+    const nextCustomModel = prefs?.customModel ?? '';
+
+    if (!prefs) {
+      saveAiPrefs({ provider: initialProvider, modelId: resolvedModelId, customModel: nextCustomModel });
+    }
 
     setProvider(initialProvider);
     setModelId(resolvedModelId);
-    setCustomModel(prefs?.customModel ?? '');
+    setCustomModel(nextCustomModel);
   }, [models]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        AI_PREFS_STORAGE_KEY,
-        JSON.stringify({ provider, modelId, customModel } satisfies AiPrefs),
-      );
-      window.dispatchEvent(new Event(AI_PREFS_CHANGED_EVENT));
-    } catch {
-      return;
-    }
-  }, [provider, modelId, customModel]);
+    if (!openSettings) return;
+    const prefs = readAiPrefs();
+    if (!prefs) return;
+    const resolvedModelId =
+      models.some((m) => m.provider === prefs.provider && m.id === prefs.modelId)
+        ? prefs.modelId
+        : resolveDefaultModelId(models, prefs.provider);
+    setProvider(prefs.provider);
+    setModelId(resolvedModelId);
+    setCustomModel(prefs.customModel ?? '');
+  }, [openSettings, models]);
 
   useEffect(() => {
     if (models.length === 0) return;
@@ -187,9 +203,10 @@ const Navbar: React.FC<Props> = ({ authStorageKey }) => {
                     value={provider}
                     onValueChange={(val) => {
                       const nextProvider = val as AiProviderId;
+                      const nextModelId = resolveDefaultModelId(models, nextProvider);
                       setProvider(nextProvider);
                       setCustomModel('');
-                      setModelId(resolveDefaultModelId(models, nextProvider));
+                      setModelId(nextModelId);
                     }}
                   >
                     <SelectTrigger className="mt-1">
@@ -234,6 +251,18 @@ const Navbar: React.FC<Props> = ({ authStorageKey }) => {
                   onChange={(e) => setCustomModel(e.target.value)}
                   placeholder={provider === 'gemini' ? 'gemini-2.5-pro' : 'kimi-k2-turbo-preview'}
                 />
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  variant="default"
+                  onClick={() => {
+                    saveAiPrefs({ provider, modelId, customModel });
+                    showSuccess('Preferencias de IA guardadas');
+                  }}
+                >
+                  Guardar
+                </Button>
               </div>
             </div>
           </div>

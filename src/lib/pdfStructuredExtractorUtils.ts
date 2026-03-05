@@ -63,6 +63,23 @@ export const detectAmountColumnsFromHeaders = (headers: string[]) => {
   return { creditIndex, debitIndex };
 };
 
+const parseAmountValue = (value: string) => {
+  if (!value) return 0;
+  let cleaned = value.trim().replace(/[$€£¥₡]/g, '');
+  const isNegative = cleaned.includes('(') && cleaned.includes(')');
+  cleaned = cleaned.replace(/[()]/g, '');
+  const lastComma = cleaned.lastIndexOf(',');
+  const lastDot = cleaned.lastIndexOf('.');
+  if (lastComma > lastDot) {
+    cleaned = cleaned.replace(/\./g, '').replace(',', '.');
+  } else {
+    cleaned = cleaned.replace(/,/g, '');
+  }
+  const amount = Number.parseFloat(cleaned);
+  if (Number.isNaN(amount)) return 0;
+  return isNegative ? -Math.abs(amount) : amount;
+};
+
 export const computeInvalidAmountRows = (headers: string[], rows: string[][]) => {
   const cols = detectAmountColumnsFromHeaders(headers);
   if (!cols) return [];
@@ -74,7 +91,14 @@ export const computeInvalidAmountRows = (headers: string[], rows: string[][]) =>
     const debitValue = (row[debitIndex] || '').toString().trim();
     const bothFilled = creditValue !== '' && debitValue !== '';
     const bothEmpty = creditValue === '' && debitValue === '';
-    if (bothFilled || bothEmpty) {
+    if (bothFilled) {
+      const creditAmount = parseAmountValue(creditValue);
+      const debitAmount = parseAmountValue(debitValue);
+      const oneIsZero = creditAmount === 0 || debitAmount === 0;
+      if (!oneIsZero) invalid.push(i);
+      continue;
+    }
+    if (bothEmpty) {
       invalid.push(i);
     }
   }

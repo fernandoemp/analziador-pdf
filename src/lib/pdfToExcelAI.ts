@@ -176,6 +176,30 @@ const extractJsonFromModelText = (text: string) => {
   return jsonText.trim();
 };
 
+const parseRateLimitError = (error: unknown) => {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : JSON.stringify(error);
+  const lowered = raw.toLowerCase();
+  const isRateLimit =
+    lowered.includes('resource_exhausted') ||
+    lowered.includes('quota exceeded') ||
+    lowered.includes('rate limit') ||
+    lowered.includes('429') ||
+    lowered.includes('generate_content_free_tier_requests');
+  if (!isRateLimit) return null;
+  const retryMatch = raw.match(/retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i) || raw.match(/retry in (\d+(?:\.\d+)?)s/i);
+  const retrySeconds = retryMatch ? Number(retryMatch[1]) : null;
+  const retryText = retrySeconds ? ` Reintenta en ${Math.ceil(retrySeconds)}s.` : ' Reintenta en unos segundos.';
+  return {
+    message: `Se alcanzó el límite de cuota (429) en Gemini.${retryText} Revisa tu plan y límites.`,
+    debugInfo: raw,
+  };
+};
+
 export const detectPdfHeadersWithGemini = async (
   pdfFile: File,
   apiKey: string,
@@ -234,9 +258,19 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
     const modelWithStream = model as unknown as {
       generateContentStream?: (prompt: string) => Promise<GeminiStreamResult>;
     };
-    const result = shouldStream && typeof modelWithStream.generateContentStream === 'function'
-      ? await modelWithStream.generateContentStream(prompt)
-      : ((await model.generateContent(prompt)) as unknown as GeminiGenerateContentResult);
+    let result: GeminiGenerateContentResult | GeminiStreamResult;
+    try {
+      result =
+        shouldStream && typeof modelWithStream.generateContentStream === 'function'
+          ? await modelWithStream.generateContentStream(prompt)
+          : ((await model.generateContent(prompt)) as unknown as GeminiGenerateContentResult);
+    } catch (error: unknown) {
+      const rate = parseRateLimitError(error);
+      if (rate) {
+        return { success: false, error: rate.message, model: modelName, debugInfo: rate.debugInfo };
+      }
+      throw error;
+    }
     const response = await result.response;
     let text = '';
     if (shouldStream && 'stream' in result) {
@@ -278,6 +312,10 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
       usage,
     };
   } catch (error: unknown) {
+    const rate = parseRateLimitError(error);
+    if (rate) {
+      return { success: false, error: rate.message, model: modelName, debugInfo: rate.debugInfo };
+    }
     let debugInfo: string | undefined;
     try {
       if (error instanceof Error) {
@@ -423,9 +461,19 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
       const modelWithStream = model as unknown as {
         generateContentStream?: (prompt: string) => Promise<GeminiStreamResult>;
       };
-      const result = shouldStream && typeof modelWithStream.generateContentStream === 'function'
-        ? await modelWithStream.generateContentStream(prompt)
-        : ((await model.generateContent(prompt)) as unknown as GeminiGenerateContentResult);
+      let result: GeminiGenerateContentResult | GeminiStreamResult;
+      try {
+        result =
+          shouldStream && typeof modelWithStream.generateContentStream === 'function'
+            ? await modelWithStream.generateContentStream(prompt)
+            : ((await model.generateContent(prompt)) as unknown as GeminiGenerateContentResult);
+      } catch (error: unknown) {
+        const rate = parseRateLimitError(error);
+        if (rate) {
+          return { success: false, error: rate.message, model: modelName, debugInfo: rate.debugInfo };
+        }
+        throw error;
+      }
       const response = await result.response;
       let text = '';
       if (shouldStream && 'stream' in result) {
@@ -561,6 +609,10 @@ RESPONDE SOLO CON EL JSON, SIN EXPLICACIONES.`;
       },
     };
   } catch (error: unknown) {
+    const rate = parseRateLimitError(error);
+    if (rate) {
+      return { success: false, error: rate.message, model: modelName, debugInfo: rate.debugInfo };
+    }
     let debugInfo: string | undefined;
     try {
       if (error instanceof Error) {

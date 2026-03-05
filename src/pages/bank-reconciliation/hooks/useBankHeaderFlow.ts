@@ -75,7 +75,7 @@ export const useBankHeaderFlow = ({
     if (activePdfRole !== 'bank') return;
     if (!pendingManualDetection.current) return;
     pendingManualDetection.current = false;
-    ai.handleAnalyzeWithAI().catch(() => {});
+    ai.detectHeadersOnly().catch(() => {});
   }, [activePdfRole, ai, step]);
 
   useEffect(() => {
@@ -114,7 +114,7 @@ export const useBankHeaderFlow = ({
       ai.handleFileSelected(bankFile).catch(() => {});
       return;
     }
-    ai.handleAnalyzeWithAI().catch(() => {});
+    ai.detectHeadersOnly().catch(() => {});
   };
 
   return { savedBankHeaders, handleConfirmBankHeaders, handleDetectBankHeaders };
