@@ -885,6 +885,17 @@ export const useAiPdfVerification = ({
     await runFullAnalysisWithHeaders(confirmedHeaders);
   };
 
+  const detectHeadersOnly = async () => {
+    setAiAnalysisState('idle');
+    setAiHeaders([]);
+    setAiRows([]);
+    setAiPageRowCounts([]);
+    setDiff(null);
+    setTotalParts(null);
+    setProcessedParts(0);
+    await runHeaderDetection();
+  };
+
   const addHeaderField = () => {
     setHeaderDraft(prev => {
       if (!prev || prev.length === 0) return [''];
@@ -1355,6 +1366,7 @@ export const useAiPdfVerification = ({
     effectiveModelName,
     handleFileSelected,
     handleAnalyzeWithAI,
+    detectHeadersOnly,
     addHeaderField,
     deleteHeaderField,
     updateHeaderField,

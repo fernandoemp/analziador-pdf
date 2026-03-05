@@ -140,29 +140,6 @@ export function Step4LedgerHeaders({
                     Agregar columna
                   </Button>
                 </div>
-                <div>
-                  <div className="text-sm text-muted-foreground mb-2">Vista previa (primeras 5 filas)</div>
-                  <div className="border rounded-md overflow-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          {ledgerHeaderDraft.map((header, idx) => (
-                            <TableHead key={`header-${idx}`}>{header || '-'}</TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {ledgerPreviewRows.map((row, idx) => (
-                          <TableRow key={`row-${idx}`}>
-                            {ledgerHeaderDraft.map((_, colIdx) => (
-                              <TableCell key={`cell-${idx}-${colIdx}`}>{row[colIdx] ?? ''}</TableCell>
-                            ))}
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </div>
               </>
             ) : null}
           </div>
@@ -181,7 +158,7 @@ export function Step4LedgerHeaders({
           Regresar al extracto
         </Button>
         <Button type="button" onClick={onConfirm} disabled={ledgerFormat !== 'pdf' && !hasLocalHeaders}>
-          Confirmar y Continuar
+          Confirmar encabezado y analizar movimientos
         </Button>
       </div>
     </div>

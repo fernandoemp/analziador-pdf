@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Key, Eye, EyeOff, CheckCircle2, AlertCircle, ExternalLink } from 'lucide-react';
 import { settingsDb } from '@/lib/localDb';
 import { showSuccess, showError } from '@/utils/toast';
@@ -12,6 +13,8 @@ const GeminiApiKeyConfig: React.FC = () => {
   const [apiKey, setApiKey] = useState<string>('');
   const [showKey, setShowKey] = useState<boolean>(false);
   const [isConfigured, setIsConfigured] = useState<boolean>(false);
+  const [testModelId, setTestModelId] = useState<string>('');
+  const [testCustomModel, setTestCustomModel] = useState<string>('');
 
   useEffect(() => {
     const savedKey = settingsDb.getGeminiApiKey();
@@ -19,7 +22,38 @@ const GeminiApiKeyConfig: React.FC = () => {
       setApiKey(savedKey);
       setIsConfigured(true);
     }
+    try {
+      const GEMINI_TEST_PREFS_KEY = 'pdf-structured-extractor:gemini-test-model:v1';
+      const models = settingsDb.getAiModels().filter(m => m.provider === 'gemini');
+      let initialId = models[0]?.id || '';
+      const raw = localStorage.getItem(GEMINI_TEST_PREFS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { modelId?: string; customModel?: string };
+        const custom = typeof parsed.customModel === 'string' ? parsed.customModel.trim() : '';
+        if (custom) {
+          setTestCustomModel(custom);
+          initialId = '';
+        } else if (typeof parsed.modelId === 'string' && models.some(m => m.id === parsed.modelId)) {
+          initialId = parsed.modelId;
+        }
+      }
+      setTestModelId(initialId);
+    } catch {
+      setTestModelId('');
+    }
   }, []);
+
+  useEffect(() => {
+    try {
+      const GEMINI_TEST_PREFS_KEY = 'pdf-structured-extractor:gemini-test-model:v1';
+      localStorage.setItem(
+        GEMINI_TEST_PREFS_KEY,
+        JSON.stringify({ modelId: testModelId, customModel: testCustomModel }),
+      );
+    } catch {
+      return;
+    }
+  }, [testModelId, testCustomModel]);
 
   const handleSave = () => {
     if (!apiKey || apiKey.trim() === '') {
@@ -46,9 +80,16 @@ const GeminiApiKeyConfig: React.FC = () => {
     }
 
     try {
+      const models = settingsDb.getAiModels().filter(m => m.provider === 'gemini');
+      const custom = testCustomModel.trim();
+      const effectiveModel =
+        custom ||
+        (models.find(m => m.id === testModelId)?.model || '') ||
+        'gemini-2.5-flash';
+
       const { GoogleGenerativeAI } = await import('@google/generative-ai');
       const genAI = new GoogleGenerativeAI(apiKey.trim());
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      const model = genAI.getGenerativeModel({ model: effectiveModel });
       
       const result = await model.generateContent('Di "Hola" en una palabra');
       const response = await result.response;
@@ -61,8 +102,20 @@ const GeminiApiKeyConfig: React.FC = () => {
       }
     } catch (error: unknown) {
       console.error('Error al probar API Key:', error);
-      const message = error instanceof Error ? error.message : 'API Key inválida';
-      showError(`Error: ${message}`);
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      const isQuota = /\b429\b/.test(rawMessage) || /Quota exceeded/i.test(rawMessage);
+      const isPermission = /\b403\b/.test(rawMessage) || /PERMISSION_DENIED/i.test(rawMessage);
+      if (isQuota) {
+        showError(
+          'Límite excedido o cuota 0 para el modelo seleccionado. Cambia el modelo en Configuración → Verificación con IA o vincula facturación en Google AI Studio. Más info: https://ai.google.dev/gemini-api/docs/rate-limits',
+        );
+      } else if (isPermission) {
+        showError(
+          'Permiso denegado. Verifica que la API Key sea válida y que el proyecto tenga acceso al Gemini API.',
+        );
+      } else {
+        showError(`Error: ${rawMessage}`);
+      }
     }
   };
 
@@ -117,6 +170,41 @@ const GeminiApiKeyConfig: React.FC = () => {
           <p className="text-xs text-muted-foreground">
             Tu API Key se guarda localmente en tu navegador y nunca se envía a nuestros servidores
           </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Modelo de prueba</Label>
+          <Select
+            value={testModelId || undefined}
+            onValueChange={(val) => {
+              setTestModelId(val);
+              setTestCustomModel('');
+            }}
+          >
+            <SelectTrigger className="mt-1">
+              <SelectValue placeholder="Selecciona modelo de prueba" />
+            </SelectTrigger>
+            <SelectContent>
+              {settingsDb
+                .getAiModels()
+                .filter((m) => m.provider === 'gemini')
+                .map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.label} ({m.model})
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+          <div className="mt-2">
+            <Label htmlFor="custom-model-test">Modelo personalizado</Label>
+            <Input
+              id="custom-model-test"
+              type="text"
+              value={testCustomModel}
+              onChange={(e) => setTestCustomModel(e.target.value)}
+              placeholder="gemini-2.5-pro"
+            />
+          </div>
         </div>
 
         {/* Botones de acción */}

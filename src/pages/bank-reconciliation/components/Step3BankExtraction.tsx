@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +17,15 @@ export function Step3BankExtraction({
   onBack: () => void;
   onContinue: () => void;
 }) {
+  useEffect(() => {
+    if (!bankFile) return;
+    if (ai.aiRows.length > 0 || ai.isAnalyzing) return;
+    if (!ai.confirmedHeaders || ai.confirmedHeaders.length === 0) return;
+    if (ai.aiAnalysisState === 'idle' || ai.aiAnalysisState === 'failed') {
+      ai.handleAnalyzeWithAI().catch(() => {});
+    }
+  }, [ai, bankFile]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
